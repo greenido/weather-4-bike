@@ -256,8 +256,15 @@ function renderCurrent() {
     <div class="text-sm text-gray-500 dark:text-gray-400">Wind ${Math.round(c.windSpeed ?? 0)} km/h · UV ${Math.round(c.uvIndex ?? 0)}</div>
   `;
 
-  // Background weather icon with runtime fallback
-  weatherBgIcon.innerHTML = createWeatherIconImg(c.weatherCode, 'w-[1em] h-[1em]');
+  // Background weather icon with runtime fallback and higher visibility layer
+  weatherBgIcon.innerHTML = `
+    <div class="relative">
+      <span class="absolute inset-0 bg-white/40 dark:bg-black/30 blur-xl rounded-full"></span>
+      <span class="relative inline-block drop-shadow-xl">
+        ${createWeatherIconImg(c.weatherCode, 'w-[1em] h-[1em] opacity-90')}
+      </span>
+    </div>
+  `;
   const items = [
     { label: 'Temp', value: `${formatTemp(c.temperature)}` },
     { label: 'Feels', value: `${formatTemp(c.temperature)}` },
