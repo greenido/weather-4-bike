@@ -24,6 +24,19 @@ python3 -m http.server 9000
 
 Or use any dev server (MAMP, VSCode Live Server, nginx, etc.).
 
+## Deploy to GitHub Pages
+
+1. Create a new GitHub repository (or use existing) and push this project to the root of the default branch (e.g., `main`).
+2. Add a file named `.nojekyll` at the project root (already included) to ensure assets are served as-is.
+3. In GitHub → Settings → Pages:
+   - Source: Deploy from a branch
+   - Branch: `main` (or your default) / Root (`/`)
+4. Save. After a minute, your site will be available at `https://<username>.github.io/<repo>/`.
+
+Notes:
+- This is a pure static site (HTML/JS/CSS), so no build is required.
+- If using a custom domain, configure it in Pages settings and add a `CNAME` file.
+
 ## APIs
 
 - Forecast: Open‑Meteo Forecast API
