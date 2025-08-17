@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="256" height="256" fill="none" stroke="#4b5563" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-label="Bicycle icon">
+  <!-- Wheels -->
+  <circle cx="18" cy="46" r="10"/>
+  <circle cx="46" cy="46" r="10"/>
+
+  <!-- Bottom bracket and crank -->
+  <circle cx="26" cy="46" r="3"/>
+  <path d="M26 46 l6 3"/>
+
+  <!-- Frame: chainstay, seat tube, top tube, down tube -->
+  <path d="M18 46 L26 46"/>
+  <path d="M26 46 L28 28"/>
+  <path d="M28 28 L42 28"/>
+  <path d="M42 28 L26 46"/>
+
+  <!-- Fork and handlebar -->
+  <path d="M46 46 L42 28"/>
+  <path d="M42 28 L49 24"/>
+
+  <!-- Seat -->
+  <path d="M28 28 L24 24"/>
+  <path d="M22 24 L28 24"/>
+
+  <!-- Subtle details: front pedal and small accents -->
+  <path d="M32 49 l1.5 3"/>
+</svg>
+
+

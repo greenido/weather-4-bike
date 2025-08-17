@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Weather 4 Bike</title>
+    <meta name="description" content="Cycling-specific weather insights for road, gravel, and MTB.">
+    <link rel="icon" href="assets/images/favicon.ico">
+    <!-- Tailwind via CDN for MVP; can be replaced with compiled CSS later -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'media',
+        theme: {
+          extend: {
+            colors: {
+              road: {
+                DEFAULT: '#2563eb' // blue-600
+              },
+              gravel: {
+                DEFAULT: '#ea580c' // orange-600
+              },
+              mtb: {
+                DEFAULT: '#16a34a' // green-600
+              }
+            }
+          }
+        }
+      }
+    </script>
+  </head>
+  <body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100">
+    <div class="min-h-screen max-w-6xl mx-auto px-4 py-4 sm:py-6">
+      <!-- Header -->
+      <header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2">
+            <div id="app-title" class="text-2xl font-bold">Weather 4 Bike</div>
+            <img src="assets/icons/bike.svg" alt="Bike" class="w-6 h-6 opacity-80" />
+          </div>
+          <span id="location-indicator" class="text-sm text-gray-500 dark:text-gray-400"></span>
+        </div>
+        <div class="flex flex-col sm:flex-row gap-2 sm:items-center w-full sm:w-auto">
+          <div class="relative w-full sm:w-80">
+            <input id="city-search" type="text" placeholder="Search city..." aria-label="Search city" class="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <div id="search-results" class="absolute z-20 mt-1 w-full bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 hidden max-h-72 overflow-auto"></div>
+          </div>
+          <button id="use-geolocation" aria-label="Use current location" title="Use current location" class="rounded-full border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5">
+              <path d="M12 8v8M8 12h8"/>
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>
+            </svg>
+          </button>
+          <div class="inline-flex rounded-full overflow-hidden border border-gray-300 dark:border-gray-700">
+            <button id="units-c" class="px-3 py-2 text-sm bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700" aria-pressed="true" title="Show temperatures in Celsius">°C</button>
+            <button id="units-f" class="px-3 py-2 text-sm bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700" aria-pressed="false" title="Show temperatures in Fahrenheit">°F</button>
+          </div>
+          <div class="relative">
+            <button id="recents-toggle" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Recent</button>
+            <div id="recents-list" class="absolute right-0 mt-2 z-10 w-72 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 hidden max-h-80 overflow-auto"></div>
+          </div>
+        </div>
+      </header>
+
+      <!-- Activity Selector -->
+      <section class="mb-4">
+        <div class="inline-flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700" role="tablist" aria-label="Select cycling activity">
+          <button id="activity-road" data-activity="road" class="px-4 py-2 text-road font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="true">Road</button>
+          <button id="activity-gravel" data-activity="gravel" class="px-4 py-2 text-gravel font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="false">Gravel</button>
+          <button id="activity-mtb" data-activity="mtb" class="px-4 py-2 text-mtb font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="false">MTB</button>
+        </div>
+      </section>
+
+      <!-- Main Content -->
+      <main class="grid grid-cols-1 gap-4 items-start">
+        <!-- Current Conditions Card -->
+        <section class="relative overflow-hidden rounded-lg shadow-lg p-4 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-gray-800 dark:to-gray-700">
+          <div id="weather-bg-icon" class="pointer-events-none select-none absolute -right-2 -top-2 text-[96px] opacity-20 dark:opacity-10 p-4 sm:p-6"></div>
+          <h2 class="text-lg font-semibold mb-3">Current Conditions</h2>
+          <div class="flex items-center gap-4 mb-4">
+            <div id="current-summary" class="flex-1"></div>
+          </div>
+          <div id="current-conditions" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
+        </section>
+
+        <!-- Detailed Insights -->
+        <section class="rounded-lg shadow-lg p-4 bg-white/90 dark:bg-gray-800/90 backdrop-blur">
+          <h2 class="text-lg font-semibold mb-3">Activity Insights</h2>
+          <div id="insights" class="space-y-3"></div>
+        </section>
+
+        <!-- Hourly Forecast -->
+        <section class="rounded-lg shadow-lg p-4 bg-white dark:bg-gray-800">
+          <h2 class="text-lg font-semibold mb-3">Next 24 Hours</h2>
+          <div id="hourly-forecast" class="flex gap-3 overflow-x-auto pb-2"></div>
+        </section>
+
+        <!-- 7-Day Forecast -->
+        <section class="rounded-lg shadow-lg p-4 bg-white dark:bg-gray-800">
+          <h2 class="text-lg font-semibold mb-3">7-Day Forecast</h2>
+          <div id="daily-forecast" class="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-3"></div>
+        </section>
+      </main>
+
+      <!-- Scenic cycling image (Unsplash Source API) -->
+      <section class="rounded-lg overflow-hidden shadow-lg mt-4">
+        <img id="scenic-image" src="https://source.unsplash.com/featured/1600x400?cycling,landscape" alt="Cycling scenery" class="w-full h-40 sm:h-56 object-cover" loading="lazy" referrerpolicy="no-referrer" />
+      </section>
+
+      <footer class="mt-6 text-xs text-gray-500 dark:text-gray-400">
+        Weather icons by <a href="https://www.flaticon.com/free-icons/weather" target="_blank" rel="noopener" class="underline">Flaticon</a>.
+      </footer>
+
+      <!-- Toasts / Messages -->
+      <div id="toast" class="fixed bottom-4 left-1/2 -translate-x-1/2 bg-gray-900 text-white rounded-lg px-4 py-2 shadow-lg hidden"></div>
+    </div>
+
+    <script type="module" src="js/app.js"></script>
+  </body>
+  </html>
+
+
