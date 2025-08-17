@@ -1,5 +1,5 @@
 import { fetchWeatherData } from './weather.js';
-import { getCurrentLocation, searchCities, saveRecentLocation, getRecentLocations, clearRecentLocations, reverseGeocode } from './location.js';
+import { getCurrentLocation, searchCities, saveRecentLocation, getRecentLocations, clearRecentLocations, reverseGeocode, setLastLocation, getLastLocation } from './location.js';
 import { calculateRoadCyclingScore, calculateGravelConditions, calculateMTBTrailReadiness, generateSafetyAlerts, applyEnvironmentalPenalties, calculateBikeScoreFromWeather, calculateGravelScoreFromWeather, calculateMTBScoreFromWeather } from './insights.js';
 
 const state = {
@@ -36,10 +36,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindUI();
   initScenicImageFallback();
   try {
-    setLocationIndicator('Locating…');
-    const { latitude, longitude, accuracy } = await getCurrentLocation();
-    const rev = await safeReverse(latitude, longitude);
-    await loadWeather(rev || { name: 'Current location', latitude, longitude, region: '', country: '', accuracy });
+    // Try last location first
+    const last = getLastLocation();
+    if (last) {
+      await loadWeather(last);
+    } else {
+      setLocationIndicator('Locating…');
+      const { latitude, longitude, accuracy } = await getCurrentLocation();
+      const rev = await safeReverse(latitude, longitude);
+      await loadWeather(rev || { name: 'Current location', latitude, longitude, region: '', country: '', accuracy });
+    }
   } catch (e) {
     setLocationIndicator('Using default location');
     // Default demo location if geolocation is unavailable
@@ -85,6 +91,16 @@ function bindUI() {
   recentsToggle.addEventListener('click', () => {
     renderRecentsDropdown();
     recentsList.classList.toggle('hidden');
+  });
+
+  // Mobile menu toggle
+  const mobileBtn = document.getElementById('mobile-menu-btn');
+  const headerControls = document.getElementById('header-controls');
+  mobileBtn?.addEventListener('click', () => {
+    if (!headerControls) return;
+    const isHidden = headerControls.classList.contains('hidden');
+    headerControls.classList.toggle('hidden');
+    mobileBtn.setAttribute('aria-expanded', String(isHidden));
   });
 
   // Help modal
@@ -182,6 +198,7 @@ async function loadWeather(location) {
       country: location.country || '',
       timestamp: Date.now()
     });
+    setLastLocation(location);
     renderAll();
     hideToast();
     console.groupEnd();
@@ -257,14 +274,8 @@ function renderCurrent() {
   `;
 
   // Background weather icon with runtime fallback and higher visibility layer
-  weatherBgIcon.innerHTML = `
-    <div class="relative">
-      <span class="absolute inset-0 bg-white/40 dark:bg-black/30 blur-xl rounded-full"></span>
-      <span class="relative inline-block drop-shadow-xl">
-        ${createWeatherIconImg(c.weatherCode, 'w-[1em] h-[1em] opacity-90')}
-      </span>
-    </div>
-  `;
+  // Removed from Current Conditions; large icon now shown in Biking Conditions sidebar
+  if (weatherBgIcon) weatherBgIcon.innerHTML = '';
   const items = [
     { label: 'Temp', value: `${formatTemp(c.temperature)}`, icon: 'temp', title: 'Air temperature' },
     { label: 'Feels', value: `${formatTemp(c.temperature)}`, icon: 'thermo', title: 'Feels like (approx)' },
@@ -368,10 +379,22 @@ function renderInsights() {
           <li>Temperature penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.temperaturePenalty ?? 0}</li>
           <li>Humidity penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.humidityPenalty ?? 0}</li>
           <li>Visibility penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.visibilityPenalty ?? 0}</li>
+          ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.uvPenalty != null ? `<li>UV penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown.uvPenalty}</li>` : ''}
         </ul>
       </div>
     </div>
   ` : '';
+
+  const bigIcon = `
+    <div class="mt-4 flex justify-center items-center">
+      <div class="relative">
+        <span class="absolute inset-0 bg-white/30 dark:bg-black/30 blur-xl rounded-full"></span>
+        <span class="relative inline-block drop-shadow-xl">
+          ${createWeatherIconImg(c.weatherCode, 'h-40 sm:h-48 md:h-56 lg:h-64 w-auto opacity-90')}
+        </span>
+      </div>
+    </div>
+  `;
   bikeTile.innerHTML = `
     <div class="flex flex-col sm:flex-row gap-4">
       <div class="flex-1">
@@ -395,6 +418,7 @@ function renderInsights() {
       </div>
       <div class="sm:w-72 w-full sm:border-l sm:pl-4 border-gray-200 dark:border-gray-700">
         ${explain}
+        ${bigIcon}
       </div>
     </div>
   `;

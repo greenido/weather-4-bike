@@ -40,7 +40,12 @@
           </div>
           <span id="location-indicator" class="text-sm text-gray-500 dark:text-gray-400"></span>
         </div>
-        <div class="flex flex-col sm:flex-row gap-2 sm:items-center w-full sm:w-auto">
+        <div class="flex items-center gap-2 sm:gap-2 w-full sm:w-auto justify-end">
+          <button id="mobile-menu-btn" class="sm:hidden rounded-lg border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" aria-label="Open menu" aria-expanded="false" aria-controls="header-controls">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+          </button>
+        </div>
+        <div id="header-controls" class="hidden sm:flex flex-col sm:flex-row gap-2 sm:items-center w-full sm:w-auto">
           <div class="relative w-full sm:w-80">
             <input id="city-search" type="text" placeholder="Search city..." aria-label="Search city" class="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
             <div id="search-results" class="absolute z-20 mt-1 w-full bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 hidden max-h-72 overflow-auto"></div>
@@ -79,7 +84,6 @@
         <section class="relative overflow-hidden rounded-lg shadow-lg p-4 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-gray-800 dark:to-gray-700">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-lg font-semibold">Current Conditions</h2>
-            <div id="weather-bg-icon" class="pointer-events-none select-none text-[56px] sm:text-[72px]"></div>
           </div>
           <div class="flex items-center gap-4 mb-4">
             <div id="current-summary" class="flex-1"></div>

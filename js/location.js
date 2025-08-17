@@ -1,6 +1,7 @@
 // Location handling: geolocation, geocoding search, and recent locations
 
 const RECENTS_KEY = 'w4b_recent_locations_v1';
+const LAST_KEY = 'w4b_last_location_v1';
 const MAX_RECENTS = 15;
 
 export function getCurrentLocation(options = { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }) {
@@ -113,6 +114,37 @@ function getRecentLocationsInternal() {
 
 function normalizeName(name) {
   return String(name || '').trim().toLowerCase();
+}
+
+// Persist last selected location
+export function setLastLocation(location) {
+  try {
+    const payload = {
+      id: String(location.id || `${location.latitude},${location.longitude}`),
+      name: String(location.name || ''),
+      latitude: Number(location.latitude),
+      longitude: Number(location.longitude),
+      region: String(location.region || ''),
+      country: String(location.country || ''),
+      timestamp: Date.now()
+    };
+    localStorage.setItem(LAST_KEY, JSON.stringify(payload));
+  } catch (e) {
+    // ignore
+  }
+}
+
+export function getLastLocation() {
+  try {
+    const raw = localStorage.getItem(LAST_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return null;
+    if (typeof obj.latitude !== 'number' || typeof obj.longitude !== 'number') return null;
+    return obj;
+  } catch (e) {
+    return null;
+  }
 }
 
 
