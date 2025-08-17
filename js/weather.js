@@ -117,6 +117,18 @@ export function parseWeatherResponse(data) {
 }
 
 export function formatWeatherData(raw) {
+  // Compute local YYYY-MM-DD string for today to filter out past days
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const todayStr = `${yyyy}-${mm}-${dd}`;
+
+  // Keep only days from today onward and limit to 7 entries
+  const next7Daily = Array.isArray(raw.daily)
+    ? raw.daily.filter(d => String(d.date) >= todayStr).slice(0, 7)
+    : [];
+
   return {
     ...raw,
     current: {
@@ -127,7 +139,7 @@ export function formatWeatherData(raw) {
       ...h,
       weatherText: mapWeatherCodeToText(h.weatherCode)
     })),
-    daily: raw.daily.map(d => ({
+    daily: next7Daily.map(d => ({
       ...d,
       weatherText: mapWeatherCodeToText(d.weatherCode)
     }))
