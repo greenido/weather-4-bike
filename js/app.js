@@ -30,6 +30,7 @@ const insightsContainer = document.getElementById('insights');
 const hourlyContainer = document.getElementById('hourly-forecast');
 const dailyContainer = document.getElementById('daily-forecast');
 const toast = document.getElementById('toast');
+let dailyTempChart = null;
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
@@ -236,6 +237,7 @@ function renderAll() {
   renderInsights();
   renderHourly();
   renderDaily();
+  renderDailyTempChart();
   renderRecentsDropdown();
 }
 
@@ -492,6 +494,108 @@ function renderDaily() {
       <div class="text-xs">💧 ${Math.round(d.precipitationProbabilityMax ?? 0)}% · 💨 ${Math.round((d.windSpeedMax ?? 0))} km/h</div>
     `;
     dailyContainer.appendChild(el);
+  });
+}
+
+function renderDailyTempChart() {
+  const canvas = document.getElementById('daily-temp-chart');
+  if (!canvas || !state.weather || !Array.isArray(state.weather.daily)) return;
+  if (typeof window.Chart === 'undefined') return; // Chart.js not loaded
+  // Register datalabels plugin once if available
+  if (window.Chart && window.ChartDataLabels && !window.__chartDatalabelsRegistered) {
+    try { window.Chart.register(window.ChartDataLabels); window.__chartDatalabelsRegistered = true; } catch {}
+  }
+
+  const ctx = canvas.getContext('2d');
+  const labels = state.weather.daily.map(d => formatDay(d.date));
+  const unitSymbol = state.units === 'F' ? '°F' : '°C';
+  const bodyStyles = getComputedStyle(document.body);
+  const textColor = bodyStyles.color || '#111827'; // gray-900 default
+  const gridColor = 'rgba(107,114,128,0.2)'; // gray-500/20
+
+  const toDisplayTempNumber = (celsius) => {
+    const c = Number(celsius);
+    if (Number.isNaN(c)) return null;
+    return state.units === 'F' ? Math.round(cToF(c)) : Math.round(c);
+  };
+
+  const tempsMax = state.weather.daily.map(d => toDisplayTempNumber(d.temperatureMax));
+  const tempsMin = state.weather.daily.map(d => toDisplayTempNumber(d.temperatureMin));
+
+  if (dailyTempChart) {
+    dailyTempChart.destroy();
+    dailyTempChart = null;
+  }
+
+  dailyTempChart = new window.Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: `Max (${unitSymbol})`,
+          data: tempsMax,
+          borderColor: 'rgb(239, 68, 68)', // red-500
+          backgroundColor: 'rgba(239, 68, 68, 0.2)',
+          pointRadius: 3,
+          pointHoverRadius: 4,
+          borderWidth: 3,
+          tension: 0.3,
+          spanGaps: true
+        },
+        {
+          label: `Min (${unitSymbol})`,
+          data: tempsMin,
+          borderColor: 'rgb(59, 130, 246)', // blue-500
+          backgroundColor: 'rgba(59, 130, 246, 0.2)',
+          pointRadius: 3,
+          pointHoverRadius: 4,
+          borderWidth: 3,
+          tension: 0.3,
+          spanGaps: true
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: { padding: { top: 12, right: 8, left: 8, bottom: 8 } },
+      plugins: {
+        legend: { display: true, position: 'top', labels: { color: textColor } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const value = ctx.parsed.y;
+              if (value == null) return '';
+              return `${ctx.dataset.label}: ${value}${unitSymbol}`;
+            }
+          }
+        },
+        datalabels: window.ChartDataLabels ? {
+          color: textColor,
+          clamp: true,
+          anchor: 'end',
+          align: 'top',
+          offset: 2,
+          padding: 2,
+          font: { weight: '600', size: 10 },
+          formatter: (value) => (value == null ? '' : `${value}${unitSymbol}`)
+        } : undefined
+      },
+      scales: {
+        y: {
+          ticks: {
+            callback: (v) => `${v}${unitSymbol}`,
+            color: textColor
+          },
+          grid: { color: gridColor } // subtle grid
+        },
+        x: {
+          ticks: { color: textColor },
+          grid: { display: false }
+        }
+      }
+    }
   });
 }
 
