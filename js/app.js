@@ -122,16 +122,38 @@ function bindUI() {
   if (cBtn && fBtn) {
     cBtn.addEventListener('click', () => {
       state.units = 'C';
-      cBtn.setAttribute('aria-pressed', 'true');
-      fBtn.setAttribute('aria-pressed', 'false');
+      updateUnitsToggleUI();
       renderAll();
     });
     fBtn.addEventListener('click', () => {
       state.units = 'F';
-      cBtn.setAttribute('aria-pressed', 'false');
-      fBtn.setAttribute('aria-pressed', 'true');
+      updateUnitsToggleUI();
       renderAll();
     });
+    // Initialize visual state
+    updateUnitsToggleUI();
+  }
+}
+
+// Visually highlight the active units toggle
+function updateUnitsToggleUI() {
+  const cBtn = document.getElementById('units-c');
+  const fBtn = document.getElementById('units-f');
+  if (!cBtn || !fBtn) return;
+  const baseBtn = 'px-3 py-2 text-sm transition-colors';
+  const active = 'bg-blue-600 text-white dark:bg-blue-500 font-semibold';
+  const inactive = 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700';
+
+  if (state.units === 'C') {
+    cBtn.className = `${baseBtn} ${active}`;
+    fBtn.className = `${baseBtn} ${inactive}`;
+    cBtn.setAttribute('aria-pressed', 'true');
+    fBtn.setAttribute('aria-pressed', 'false');
+  } else {
+    cBtn.className = `${baseBtn} ${inactive}`;
+    fBtn.className = `${baseBtn} ${active}`;
+    cBtn.setAttribute('aria-pressed', 'false');
+    fBtn.setAttribute('aria-pressed', 'true');
   }
 }
 
