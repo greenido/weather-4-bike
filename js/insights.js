@@ -141,7 +141,7 @@ export function applyEnvironmentalPenalties(baseScore, weatherData) {
 }
 
 // New: Road bike score algorithm (1-10) based on wind, temperature, humidity, visibility
-export function calculateBikeScore(windSpeedKmh, windDirectionRelation, temperatureC, humidityPct, visibilityKm) {
+export function calculateBikeScore(windSpeedKmh, windDirectionRelation, temperatureC, humidityPct, visibilityKm, uvIndex = 0) {
   let totalScore = 10.0;
 
   // Wind penalty (0-4)
@@ -186,6 +186,14 @@ export function calculateBikeScore(windSpeedKmh, windDirectionRelation, temperat
   else visibilityPenalty = 3;
   totalScore -= visibilityPenalty;
 
+  // UV penalty (0–2)
+  let uvPenalty = 0;
+  if (uvIndex <= 5) uvPenalty = 0;
+  else if (uvIndex <= 7) uvPenalty = 0.5;
+  else if (uvIndex <= 9) uvPenalty = 1.0;
+  else uvPenalty = 1.5;
+  totalScore -= uvPenalty;
+
   // Hard cap for extreme heat "no go"
   if (temperatureC > 35) {
     totalScore = Math.min(totalScore, 2.0);
@@ -199,6 +207,11 @@ export function calculateBikeScore(windSpeedKmh, windDirectionRelation, temperat
   else if (finalScore >= 3) message = "Challenging conditions. Only go if you're experienced.";
   else message = 'Poor conditions. Consider indoor training.';
 
+  // UV recommendation
+  if (uvIndex >= 7) {
+    message += ' Consider riding early or late due to high UV.';
+  }
+
   return {
     score: finalScore,
     message,
@@ -206,7 +219,8 @@ export function calculateBikeScore(windSpeedKmh, windDirectionRelation, temperat
       windPenalty: Math.round(windPenalty * 10) / 10,
       temperaturePenalty: tempPenalty,
       humidityPenalty,
-      visibilityPenalty
+      visibilityPenalty,
+      uvPenalty: Math.round(uvPenalty * 10) / 10
     }
   };
 }
@@ -217,7 +231,8 @@ export function calculateBikeScoreFromWeather(weatherData, windRelation = 'cross
   const tempC = Number(c.temperature) || 0;
   const rh = Number(c.humidity) || 0;
   const visKm = Math.max(0, Number(c.visibility || 0) / 1000);
-  return calculateBikeScore(windKmh, windRelation, tempC, rh, visKm);
+  const uv = Number(c.uvIndex) || 0;
+  return calculateBikeScore(windKmh, windRelation, tempC, rh, visKm, uv);
 }
 
 // Gravel: higher wind sensitivity and harsher heat penalties
@@ -227,6 +242,7 @@ export function calculateGravelScoreFromWeather(weatherData) {
   const tempC = Number(c.temperature) || 0;
   const rh = Number(c.humidity) || 0;
   const visKm = Math.max(0, Number(c.visibility || 0) / 1000);
+  const uv = Number(c.uvIndex) || 0;
 
   let totalScore = 10.0;
   // Wind: +50% harsher than road, assume crosswind base
@@ -256,13 +272,18 @@ export function calculateGravelScoreFromWeather(weatherData) {
   if (visKm >= 10) visibilityPenalty = 0; else if (visKm >= 5) visibilityPenalty = 1; else if (visKm >= 2) visibilityPenalty = 2; else visibilityPenalty = 3;
   totalScore -= visibilityPenalty;
 
+  // UV penalty
+  let uvPenalty = 0;
+  if (uv <= 5) uvPenalty = 0; else if (uv <= 7) uvPenalty = 0.5; else if (uv <= 9) uvPenalty = 1.0; else uvPenalty = 1.5;
+  totalScore -= uvPenalty;
+
   if (tempC > 35) totalScore = Math.min(totalScore, 2.0);
   const finalScore = Math.max(1, Math.min(10, Math.round(totalScore * 10) / 10));
-  const message = finalScore >= 8 ? 'Great day for gravel!' : finalScore >= 6 ? 'Good gravel conditions.' : finalScore >= 4 ? 'Manageable gravel, expect challenges.' : finalScore >= 3 ? 'Challenging gravel conditions.' : 'Poor gravel conditions.';
+  const message = (finalScore >= 8 ? 'Great day for gravel!' : finalScore >= 6 ? 'Good gravel conditions.' : finalScore >= 4 ? 'Manageable gravel, expect challenges.' : finalScore >= 3 ? 'Challenging gravel conditions.' : 'Poor gravel conditions.') + (uv >= 7 ? ' Consider riding early or late due to high UV.' : '');
   return {
     score: finalScore,
     message,
-    breakdown: { windPenalty: Math.round(windPenalty * 10) / 10, temperaturePenalty: tempPenalty, humidityPenalty, visibilityPenalty }
+    breakdown: { windPenalty: Math.round(windPenalty * 10) / 10, temperaturePenalty: tempPenalty, humidityPenalty, visibilityPenalty, uvPenalty: Math.round(uvPenalty * 10) / 10 }
   };
 }
 
@@ -273,6 +294,7 @@ export function calculateMTBScoreFromWeather(weatherData) {
   const tempC = Number(c.temperature) || 0;
   const rh = Number(c.humidity) || 0;
   const visKm = Math.max(0, Number(c.visibility || 0) / 1000);
+  const uv = Number(c.uvIndex) || 0;
 
   let totalScore = 10.0;
   let windPenalty = 0;
@@ -297,13 +319,18 @@ export function calculateMTBScoreFromWeather(weatherData) {
   if (visKm >= 10) visibilityPenalty = 0; else if (visKm >= 5) visibilityPenalty = 1; else if (visKm >= 2) visibilityPenalty = 2; else visibilityPenalty = 3;
   totalScore -= visibilityPenalty;
 
+  // UV penalty
+  let uvPenalty = 0;
+  if (uv <= 5) uvPenalty = 0; else if (uv <= 7) uvPenalty = 0.5; else if (uv <= 9) uvPenalty = 1.0; else uvPenalty = 1.5;
+  totalScore -= uvPenalty;
+
   if (tempC > 35) totalScore = Math.min(totalScore, 2.0);
   const finalScore = Math.max(1, Math.min(10, Math.round(totalScore * 10) / 10));
-  const message = finalScore >= 8 ? 'Trails are prime!' : finalScore >= 6 ? 'Good day to ride.' : finalScore >= 4 ? 'Rideable with caution.' : finalScore >= 3 ? 'Challenging trail conditions.' : 'Not recommended today.';
+  const message = (finalScore >= 8 ? 'Trails are prime!' : finalScore >= 6 ? 'Good day to ride.' : finalScore >= 4 ? 'Rideable with caution.' : finalScore >= 3 ? 'Challenging trail conditions.' : 'Not recommended today.') + (uv >= 7 ? ' Consider riding early or late due to high UV.' : '');
   return {
     score: finalScore,
     message,
-    breakdown: { windPenalty: Math.round(windPenalty * 10) / 10, temperaturePenalty: tempPenalty, humidityPenalty, visibilityPenalty }
+    breakdown: { windPenalty: Math.round(windPenalty * 10) / 10, temperaturePenalty: tempPenalty, humidityPenalty, visibilityPenalty, uvPenalty: Math.round(uvPenalty * 10) / 10 }
   };
 }
 

@@ -253,7 +253,7 @@ function renderCurrent() {
       <div class="text-5xl font-bold">${mainTemp}</div>
       <div class="text-lg text-gray-600 dark:text-gray-300">${c.weatherText}</div>
     </div>
-    <div class="text-sm text-gray-500 dark:text-gray-400">Wind ${Math.round(c.windSpeed ?? 0)} km/h · UV ${Math.round(c.uvIndex ?? 0)}</div>
+    <div class="text-sm text-gray-500 dark:text-gray-400">Wind ${Math.round(c.windSpeed ?? 0)} km/h · UV ${Math.round(c.uvIndex ?? 0)} · Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
   `;
 
   // Background weather icon with runtime fallback and higher visibility layer
@@ -266,20 +266,20 @@ function renderCurrent() {
     </div>
   `;
   const items = [
-    { label: 'Temp', value: `${formatTemp(c.temperature)}` },
-    { label: 'Feels', value: `${formatTemp(c.temperature)}` },
-    { label: 'Wind', value: `${Math.round(c.windSpeed ?? 0)} km/h` },
-    { label: 'UV', value: `${Math.round(c.uvIndex ?? 0)}` },
-    { label: 'Precip', value: `${Math.round(c.precipitationProbability ?? 0)}%` },
-    { label: 'Cloud', value: `${Math.round(c.cloudCover ?? 0)}%` },
-    { label: 'Visibility', value: `${Math.round((c.visibility ?? 0) / 1000)} km` },
-    { label: 'Conditions', value: `${c.weatherText}` }
+    { label: 'Temp', value: `${formatTemp(c.temperature)}`, icon: 'temp', title: 'Air temperature' },
+    { label: 'Feels', value: `${formatTemp(c.temperature)}`, icon: 'thermo', title: 'Feels like (approx)' },
+    { label: 'Wind', value: `${Math.round(c.windSpeed ?? 0)} km/h`, icon: 'wind', title: 'Wind speed at 10m' },
+    { label: 'UV', value: `${Math.round(c.uvIndex ?? 0)}`, icon: 'uv', title: 'UV index' },
+    { label: 'Precip', value: `${Math.round(c.precipitationProbability ?? 0)}%`, icon: 'humidity', title: 'Precipitation probability' },
+    { label: 'Cloud', value: `${Math.round(c.cloudCover ?? 0)}%`, icon: 'cloud', title: 'Cloud cover' },
+    { label: 'Visibility', value: `${Math.round((c.visibility ?? 0) / 1000)} km`, icon: 'visibility', title: 'Visibility' },
+    { label: 'Conditions', value: `${c.weatherText}`, icon: 'flag', title: 'Weather summary' }
   ];
   items.forEach(it => {
     const div = document.createElement('div');
     div.className = 'rounded-md bg-gray-50 dark:bg-gray-700 p-3';
     div.innerHTML = `
-      <div class="text-xs text-gray-500 dark:text-gray-300">${it.label}</div>
+      <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-300" title="${it.title || ''}">${icon(it.icon || 'flag')}<span>${it.label}</span></div>
       <div class="text-lg font-semibold">${it.value}</div>
     `;
     currentContainer.appendChild(div);
@@ -327,9 +327,10 @@ function renderInsights() {
   // Ensure score stays within 0-100 before any downstream usage
   score = clamp(score, 0, 100);
   const { label, emoji, colorClass } = scoreToLabel(score);
+  const classes = scoreColorClasses(score);
   header.innerHTML = `
     <div class="text-sm text-gray-500 dark:text-gray-400">Selected: <span class="font-medium capitalize">${state.activity}</span></div>
-    <div class="text-xl font-bold ${colorClass}">${emoji} ${score} – ${label}</div>
+    <div class="inline-flex items-center gap-2 ${classes.bg} ${classes.text} px-3 py-1 rounded-full text-sm font-medium shadow-sm">${emoji} <span>${score} – ${label}</span></div>
   `;
 
   insightsContainer.appendChild(header);
@@ -558,6 +559,13 @@ function scoreToLabel(score) {
   if (score >= 60) return { label: 'Good', emoji: '🟡', colorClass: 'text-yellow-600' };
   if (score >= 40) return { label: 'Fair', emoji: '🟠', colorClass: 'text-orange-600' };
   return { label: 'Poor', emoji: '🔴', colorClass: 'text-red-600' };
+}
+
+function scoreColorClasses(score) {
+  if (score >= 80) return { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-700 dark:text-green-200' };
+  if (score >= 60) return { bg: 'bg-yellow-100 dark:bg-yellow-900/30', text: 'text-yellow-700 dark:text-yellow-200' };
+  if (score >= 40) return { bg: 'bg-orange-100 dark:bg-orange-900/30', text: 'text-orange-700 dark:text-orange-200' };
+  return { bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-200' };
 }
 
 function formatTemp(celsius) {
