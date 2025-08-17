@@ -66,7 +66,8 @@ export async function reverseGeocode(latitude, longitude) {
 export function saveRecentLocation(location) {
   try {
     const recents = getRecentLocationsInternal();
-    const withoutDup = recents.filter(r => r.id !== location.id);
+    const targetName = normalizeName(location.name);
+    const withoutDup = recents.filter(r => r.id !== location.id && normalizeName(r.name) !== targetName);
     const updated = [ { ...location, timestamp: Date.now() }, ...withoutDup ].slice(0, MAX_RECENTS);
     localStorage.setItem(RECENTS_KEY, JSON.stringify(updated));
   } catch (e) {
@@ -95,7 +96,23 @@ function getRecentLocationsInternal() {
   if (!raw) return [];
   const arr = JSON.parse(raw);
   if (!Array.isArray(arr)) return [];
-  return arr;
+  // Sort newest first and ensure unique per name (case-insensitive)
+  const sorted = [...arr].sort((a, b) => (Number(b.timestamp || 0) - Number(a.timestamp || 0)));
+  const seen = new Set();
+  const unique = [];
+  for (const item of sorted) {
+    const key = normalizeName(item.name);
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(item);
+    }
+    if (unique.length >= MAX_RECENTS) break;
+  }
+  return unique;
+}
+
+function normalizeName(name) {
+  return String(name || '').trim().toLowerCase();
 }
 
 

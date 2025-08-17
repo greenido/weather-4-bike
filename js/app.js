@@ -1,6 +1,6 @@
 import { fetchWeatherData } from './weather.js';
 import { getCurrentLocation, searchCities, saveRecentLocation, getRecentLocations, clearRecentLocations, reverseGeocode } from './location.js';
-import { calculateRoadCyclingScore, calculateGravelConditions, calculateMTBTrailReadiness, generateSafetyAlerts, applyEnvironmentalPenalties } from './insights.js';
+import { calculateRoadCyclingScore, calculateGravelConditions, calculateMTBTrailReadiness, generateSafetyAlerts, applyEnvironmentalPenalties, calculateBikeScoreFromWeather, calculateGravelScoreFromWeather, calculateMTBScoreFromWeather } from './insights.js';
 
 const state = {
   activity: 'road', // 'road' | 'gravel' | 'mtb'
@@ -86,6 +86,19 @@ function bindUI() {
     renderRecentsDropdown();
     recentsList.classList.toggle('hidden');
   });
+
+  // Help modal
+  const helpBtn = document.getElementById('help-button');
+  const helpModal = document.getElementById('help-modal');
+  const helpOverlay = document.getElementById('help-overlay');
+  const helpClose = document.getElementById('help-close');
+  const helpClose2 = document.getElementById('help-close-2');
+  const openHelp = () => { if (helpModal) { helpModal.classList.remove('hidden'); helpBtn?.setAttribute('aria-expanded', 'true'); } };
+  const closeHelp = () => { if (helpModal) { helpModal.classList.add('hidden'); helpBtn?.setAttribute('aria-expanded', 'false'); } };
+  helpBtn?.addEventListener('click', openHelp);
+  helpOverlay?.addEventListener('click', closeHelp);
+  helpClose?.addEventListener('click', closeHelp);
+  helpClose2?.addEventListener('click', closeHelp);
 
   // Units toggle
   const cBtn = document.getElementById('units-c');
@@ -190,8 +203,43 @@ function renderAll() {
 function initScenicImageFallback() {
   const img = document.getElementById('scenic-image');
   if (!img) return;
-  // Hide the image gracefully if Unsplash fails
-  img.onerror = () => { img.style.display = 'none'; };
+  const credit = document.getElementById('scenic-credit');
+  // Optional: set your Unsplash Access Key here or via window.UNSPLASH_ACCESS_KEY
+  const accessKey = window.UNSPLASH_ACCESS_KEY || '2637b3c08f3ee9646350728fd410ba5cf20cf548771532b1b57b353ffcc358de';
+  const query = 'cycling,mountains,outdoors';
+
+  const setImage = (url, alt, authorName, authorLink) => {
+    img.src = url;
+    img.alt = alt || 'Scenic cycling photo';
+    if (credit) {
+      if (authorName && authorLink) {
+        credit.innerHTML = `Photo by <a href="${authorLink}" target="_blank" rel="noopener" class="underline">${authorName}</a> on <a href="https://unsplash.com" target="_blank" rel="noopener" class="underline">Unsplash</a>`;
+      } else {
+        credit.textContent = '';
+      }
+    }
+  };
+
+  const setHidden = () => { img.style.display = 'none'; if (credit) credit.textContent = ''; };
+
+  if (!accessKey) {
+    // If no access key, hide image (or you could keep the Source endpoint here)
+    setHidden();
+    return;
+  }
+
+  const apiUrl = `https://api.unsplash.com/photos/random?client_id=${encodeURIComponent(accessKey)}&query=${encodeURIComponent(query)}&orientation=landscape`;
+  fetch(apiUrl)
+    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+    .then(data => {
+      const imageUrl = data?.urls?.regular || data?.urls?.full || '';
+      const alt = data?.alt_description || 'Scenic cycling';
+      const authorName = data?.user?.name;
+      const authorLink = data?.user?.links?.html;
+      if (imageUrl) setImage(imageUrl, alt, authorName, authorLink);
+      else setHidden();
+    })
+    .catch(() => setHidden());
 }
 
 function renderCurrent() {
@@ -250,14 +298,25 @@ function renderInsights() {
   const header = document.createElement('div');
   header.className = 'flex items-center justify-between';
   let score = 0;
-  if (state.activity === 'road') score = calculateRoadCyclingScore(state.weather);
+  let roadScoreDetail = null;
+  let gravelScoreDetail = null;
+  let mtbScoreDetail = null;
+  if (state.activity === 'road') {
+    // Use new 1–10 bike score; map to 0–100 for header
+    roadScoreDetail = calculateBikeScoreFromWeather(state.weather, 'crosswind');
+    const { score: s10 } = roadScoreDetail;
+    score = Math.round(s10 * 10);
+  }
   if (state.activity === 'gravel') {
-    const g = calculateGravelConditions(state.weather);
-    score = 100 - g.mudFactor * 25 + Math.round((g.comfort - 50) * 0.3);
+    gravelScoreDetail = calculateGravelScoreFromWeather(state.weather);
+    score = Math.round(gravelScoreDetail.score * 10);
   }
   if (state.activity === 'mtb') score = calculateMTBTrailReadiness(state.weather);
-  // Apply environmental penalties globally (heat/humidity/cold caps)
-  score = applyEnvironmentalPenalties(score, state.weather);
+  if (state.activity === 'mtb') {
+    mtbScoreDetail = calculateMTBScoreFromWeather(state.weather);
+    score = Math.round(mtbScoreDetail.score * 10);
+  }
+  // Remove extra global penalties to avoid double-counting with new algo
   // Ensure score stays within 0-100 before any downstream usage
   score = clamp(score, 0, 100);
   const { label, emoji, colorClass } = scoreToLabel(score);
@@ -282,34 +341,66 @@ function renderInsights() {
   const humidity = Math.round(c.humidity ?? 0);
   const visMi = Math.round(kmToMi((c.visibility ?? 0) / 1000));
   const windDir = degToCardinal(c.windDirection ?? 0);
-  // Convert to 1-10 scale with one decimal, clamped to [1,10]
-  const tenScale = clamp(Math.round((score / 10) * 10) / 10, 1, 10).toFixed(1);
+  // Convert to 1–10 scale as an integer
+  const tenInt = clamp(Math.round(score / 10), 1, 10);
   const conditionText = score >= 80 ? 'Excellent riding conditions' : score >= 60 ? 'Good riding conditions' : score >= 40 ? 'Fair riding conditions' : 'Poor riding conditions';
   const windQualifier = windMph <= 6 ? 'light winds' : windMph <= 12 ? 'mild crosswinds' : 'breezy conditions';
   const labelEl = scoreToLabel(score).label;
 
   const bikeTile = document.createElement('section');
   bikeTile.className = 'mt-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4 bg-gradient-to-r from-emerald-50 to-green-100 dark:from-gray-800 dark:to-gray-700';
+  const explain = (roadScoreDetail || gravelScoreDetail || mtbScoreDetail) ? `
+    <div class="mt-2">
+      <button id="bike-more-btn" class="text-sm underline">Details</button>
+      <div id="bike-explain" class="mt-2 hidden text-sm text-gray-700 dark:text-gray-200">
+        <div class="mb-1">${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).message || ''}</div>
+        <div>Score calculation (1–10): <span class="font-semibold">${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).score}</span></div>
+        <ul class="mt-1 list-disc pl-5">
+          <li>Wind penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.windPenalty ?? 0}</li>
+          <li>Temperature penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.temperaturePenalty ?? 0}</li>
+          <li>Humidity penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.humidityPenalty ?? 0}</li>
+          <li>Visibility penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.visibilityPenalty ?? 0}</li>
+        </ul>
+      </div>
+    </div>
+  ` : '';
   bikeTile.innerHTML = `
-    <div class="text-lg font-semibold mb-1">Biking Conditions</div>
-    <div class="text-sm text-gray-600 dark:text-gray-300 mb-3">${conditionText} with ${windQualifier}</div>
-    <div class="text-2xl font-bold mb-1">${tenScale}/10</div>
-    <div class="text-sm mb-3">${labelEl}</div>
-    <div class="text-sm font-medium mb-1">Key Factors</div>
-    <ul class="text-sm mb-3 space-y-1">
-      <li class="flex items-center gap-2">${icon('wind')}<span>Wind: ${windMph}mph ${windDir}</span></li>
-      <li class="flex items-center gap-2">${icon('temp')}<span>Temperature: ${tempDisp}</span></li>
-      <li class="flex items-center gap-2">${icon('humidity')}<span>Humidity: ${humidity}%</span></li>
-      <li class="flex items-center gap-2">${icon('visibility')}<span>Visibility: ${visMi}mi</span></li>
-    </ul>
-    <div class="text-sm font-medium mb-1">Recommendations</div>
-    <ul class="text-sm space-y-1">
-      <li class="flex items-center gap-2">${icon('flag')}<span>${windMph <= 6 ? 'Light wind conditions' : 'Manage crosswinds on exposed sections'}</span></li>
-      <li class="flex items-center gap-2">${icon('thermo')}<span>${(state.units === 'F' ? (Number(c.temperature) >= 55 && Number(c.temperature) <= 75) : (Number(c.temperature) >= 13 && Number(c.temperature) <= 24)) ? 'Perfect temperature for long rides' : (state.units === 'F' ? (Number(c.temperature) < 55 ? 'Layer up for cooler temps' : 'Hydrate and avoid peak sun') : (Number(c.temperature) < 13 ? 'Layer up for cooler temps' : 'Hydrate and avoid peak sun'))}</span></li>
-      <li class="flex items-center gap-2">${icon('uv')}<span>${(c.uvIndex ?? 0) >= 6 ? 'UV protection strongly recommended' : 'UV protection recommended'}</span></li>
-    </ul>
+    <div class="flex flex-col sm:flex-row gap-4">
+      <div class="flex-1">
+        <div class="text-lg font-semibold mb-1">Biking Conditions</div>
+        <div class="text-sm text-gray-600 dark:text-gray-300 mb-3">${conditionText} with ${windQualifier}</div>
+        <div class="text-2xl font-bold mb-1">${tenInt}/10</div>
+        <div class="text-sm mb-3">${labelEl}</div>
+        <div class="text-sm font-medium mb-1">Key Factors</div>
+        <ul class="text-sm mb-3 space-y-1">
+          <li class="flex items-center gap-2">${icon('wind')}<span>Wind: ${windMph}mph ${windDir}</span></li>
+          <li class="flex items-center gap-2">${icon('temp')}<span>Temperature: ${tempDisp}</span></li>
+          <li class="flex items-center gap-2">${icon('humidity')}<span>Humidity: ${humidity}%</span></li>
+          <li class="flex items-center gap-2">${icon('visibility')}<span>Visibility: ${visMi}mi</span></li>
+        </ul>
+        <div class="text-sm font-medium mb-1">Recommendations</div>
+        <ul class="text-sm space-y-1">
+          <li class="flex items-center gap-2">${icon('flag')}<span>${windMph <= 6 ? 'Light wind conditions' : 'Manage crosswinds on exposed sections'}</span></li>
+          <li class="flex items-center gap-2">${icon('thermo')}<span>${(state.units === 'F' ? (Number(c.temperature) >= 55 && Number(c.temperature) <= 75) : (Number(c.temperature) >= 13 && Number(c.temperature) <= 24)) ? 'Perfect temperature for long rides' : (state.units === 'F' ? (Number(c.temperature) < 55 ? 'Layer up for cooler temps' : 'Hydrate and avoid peak sun') : (Number(c.temperature) < 13 ? 'Layer up for cooler temps' : 'Hydrate and avoid peak sun'))}</span></li>
+          <li class="flex items-center gap-2">${icon('uv')}<span>${(c.uvIndex ?? 0) >= 6 ? 'UV protection strongly recommended' : 'UV protection recommended'}</span></li>
+        </ul>
+      </div>
+      <div class="sm:w-72 w-full sm:border-l sm:pl-4 border-gray-200 dark:border-gray-700">
+        ${explain}
+      </div>
+    </div>
   `;
   insightsContainer.appendChild(bikeTile);
+
+  // Wire up the More/Less toggle
+  const moreBtn = bikeTile.querySelector('#bike-more-btn');
+  const explainDiv = bikeTile.querySelector('#bike-explain');
+  if (moreBtn && explainDiv) {
+    moreBtn.addEventListener('click', () => {
+      explainDiv.classList.toggle('hidden');
+      moreBtn.textContent = explainDiv.classList.contains('hidden') ? 'Details' : 'Less';
+    });
+  }
 }
 
 function renderHourly() {

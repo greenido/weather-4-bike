@@ -140,4 +140,171 @@ export function applyEnvironmentalPenalties(baseScore, weatherData) {
   return clamp(Math.round(score), 0, 100);
 }
 
+// New: Road bike score algorithm (1-10) based on wind, temperature, humidity, visibility
+export function calculateBikeScore(windSpeedKmh, windDirectionRelation, temperatureC, humidityPct, visibilityKm) {
+  let totalScore = 10.0;
+
+  // Wind penalty (0-4)
+  let windPenalty = 0;
+  if (windSpeedKmh <= 10) windPenalty = 0;
+  else if (windSpeedKmh <= 20) windPenalty = 1;
+  else if (windSpeedKmh <= 30) windPenalty = 2;
+  else if (windSpeedKmh <= 40) windPenalty = 3;
+  else windPenalty = 4;
+
+  const dir = String(windDirectionRelation || 'crosswind').toLowerCase();
+  if (dir === 'headwind') windPenalty *= 1.3;
+  else if (dir === 'tailwind') windPenalty *= 0.7;
+  totalScore -= windPenalty;
+
+  // Temperature penalty – harsher above 30°C, "no go" above 35°C
+  let tempPenalty = 0;
+  if (temperatureC >= 15 && temperatureC <= 25) tempPenalty = 0;
+  else if ((temperatureC >= 10 && temperatureC < 15) || (temperatureC > 25 && temperatureC <= 30)) tempPenalty = 1;
+  else if ((temperatureC >= 5 && temperatureC < 10)) tempPenalty = 2;
+  else if (temperatureC > 30 && temperatureC <= 35) tempPenalty = 3; // much worse when >30
+  else if (temperatureC > 35) tempPenalty = 6; // extreme heat, heavy penalty
+  else tempPenalty = 3; // too cold (<5)
+  totalScore -= tempPenalty;
+
+  // Humidity penalty (0-2) with extra cap when >90%
+  let humidityPenalty = 0;
+  if (humidityPct <= 60) humidityPenalty = 0;
+  else if (humidityPct <= 80) humidityPenalty = 1;
+  else humidityPenalty = 2;
+  totalScore -= humidityPenalty;
+  if (humidityPct >= 90) {
+    // Make sure the total is much lower when humidity is extremely high
+    totalScore = Math.min(totalScore, 4.0);
+  }
+
+  // Visibility penalty (0-3), visibilityKm expected in km
+  let visibilityPenalty = 0;
+  if (visibilityKm >= 10) visibilityPenalty = 0;
+  else if (visibilityKm >= 5) visibilityPenalty = 1;
+  else if (visibilityKm >= 2) visibilityPenalty = 2;
+  else visibilityPenalty = 3;
+  totalScore -= visibilityPenalty;
+
+  // Hard cap for extreme heat "no go"
+  if (temperatureC > 35) {
+    totalScore = Math.min(totalScore, 2.0);
+  }
+
+  const finalScore = Math.max(1, Math.min(10, Math.round(totalScore * 10) / 10));
+  let message;
+  if (finalScore >= 8) message = 'Perfect conditions! Go for that long ride! 🚴‍♂️';
+  else if (finalScore >= 6) message = 'Good conditions for cycling. Enjoy your ride!';
+  else if (finalScore >= 4) message = 'Decent conditions, but be prepared for some challenges.';
+  else if (finalScore >= 3) message = "Challenging conditions. Only go if you're experienced.";
+  else message = 'Poor conditions. Consider indoor training.';
+
+  return {
+    score: finalScore,
+    message,
+    breakdown: {
+      windPenalty: Math.round(windPenalty * 10) / 10,
+      temperaturePenalty: tempPenalty,
+      humidityPenalty,
+      visibilityPenalty
+    }
+  };
+}
+
+export function calculateBikeScoreFromWeather(weatherData, windRelation = 'crosswind') {
+  const c = weatherData.current || {};
+  const windKmh = kph(c.windSpeed);
+  const tempC = Number(c.temperature) || 0;
+  const rh = Number(c.humidity) || 0;
+  const visKm = Math.max(0, Number(c.visibility || 0) / 1000);
+  return calculateBikeScore(windKmh, windRelation, tempC, rh, visKm);
+}
+
+// Gravel: higher wind sensitivity and harsher heat penalties
+export function calculateGravelScoreFromWeather(weatherData) {
+  const c = weatherData.current || {};
+  const windKmh = kph(c.windSpeed);
+  const tempC = Number(c.temperature) || 0;
+  const rh = Number(c.humidity) || 0;
+  const visKm = Math.max(0, Number(c.visibility || 0) / 1000);
+
+  let totalScore = 10.0;
+  // Wind: +50% harsher than road, assume crosswind base
+  let windPenalty = 0;
+  if (windKmh <= 10) windPenalty = 0; else if (windKmh <= 20) windPenalty = 1; else if (windKmh <= 30) windPenalty = 2; else if (windKmh <= 40) windPenalty = 3; else windPenalty = 4;
+  windPenalty *= 1.5;
+  totalScore -= windPenalty;
+
+  // Temperature: harsher above 30, "no go" above 35
+  let tempPenalty = 0;
+  if (tempC >= 15 && tempC <= 25) tempPenalty = 0;
+  else if ((tempC >= 10 && tempC < 15) || (tempC > 25 && tempC <= 30)) tempPenalty = 1;
+  else if (tempC >= 5 && tempC < 10) tempPenalty = 2;
+  else if (tempC > 30 && tempC <= 35) tempPenalty = 4;
+  else if (tempC > 35) tempPenalty = 7;
+  else tempPenalty = 3;
+  totalScore -= tempPenalty;
+
+  // Humidity: same base penalties, but >90% cap lower
+  let humidityPenalty = 0;
+  if (rh <= 60) humidityPenalty = 0; else if (rh <= 80) humidityPenalty = 1; else humidityPenalty = 2;
+  totalScore -= humidityPenalty;
+  if (rh >= 90) totalScore = Math.min(totalScore, 3.5);
+
+  // Visibility
+  let visibilityPenalty = 0;
+  if (visKm >= 10) visibilityPenalty = 0; else if (visKm >= 5) visibilityPenalty = 1; else if (visKm >= 2) visibilityPenalty = 2; else visibilityPenalty = 3;
+  totalScore -= visibilityPenalty;
+
+  if (tempC > 35) totalScore = Math.min(totalScore, 2.0);
+  const finalScore = Math.max(1, Math.min(10, Math.round(totalScore * 10) / 10));
+  const message = finalScore >= 8 ? 'Great day for gravel!' : finalScore >= 6 ? 'Good gravel conditions.' : finalScore >= 4 ? 'Manageable gravel, expect challenges.' : finalScore >= 3 ? 'Challenging gravel conditions.' : 'Poor gravel conditions.';
+  return {
+    score: finalScore,
+    message,
+    breakdown: { windPenalty: Math.round(windPenalty * 10) / 10, temperaturePenalty: tempPenalty, humidityPenalty, visibilityPenalty }
+  };
+}
+
+// MTB: standard wind, harsher heat penalties
+export function calculateMTBScoreFromWeather(weatherData) {
+  const c = weatherData.current || {};
+  const windKmh = kph(c.windSpeed);
+  const tempC = Number(c.temperature) || 0;
+  const rh = Number(c.humidity) || 0;
+  const visKm = Math.max(0, Number(c.visibility || 0) / 1000);
+
+  let totalScore = 10.0;
+  let windPenalty = 0;
+  if (windKmh <= 10) windPenalty = 0; else if (windKmh <= 20) windPenalty = 1; else if (windKmh <= 30) windPenalty = 2; else if (windKmh <= 40) windPenalty = 3; else windPenalty = 4;
+  totalScore -= windPenalty;
+
+  let tempPenalty = 0;
+  if (tempC >= 15 && tempC <= 25) tempPenalty = 0;
+  else if ((tempC >= 10 && tempC < 15) || (tempC > 25 && tempC <= 30)) tempPenalty = 1;
+  else if (tempC >= 5 && tempC < 10) tempPenalty = 2;
+  else if (tempC > 30 && tempC <= 35) tempPenalty = 4;
+  else if (tempC > 35) tempPenalty = 7;
+  else tempPenalty = 3;
+  totalScore -= tempPenalty;
+
+  let humidityPenalty = 0;
+  if (rh <= 60) humidityPenalty = 0; else if (rh <= 80) humidityPenalty = 1; else humidityPenalty = 2;
+  totalScore -= humidityPenalty;
+  if (rh >= 90) totalScore = Math.min(totalScore, 3.5);
+
+  let visibilityPenalty = 0;
+  if (visKm >= 10) visibilityPenalty = 0; else if (visKm >= 5) visibilityPenalty = 1; else if (visKm >= 2) visibilityPenalty = 2; else visibilityPenalty = 3;
+  totalScore -= visibilityPenalty;
+
+  if (tempC > 35) totalScore = Math.min(totalScore, 2.0);
+  const finalScore = Math.max(1, Math.min(10, Math.round(totalScore * 10) / 10));
+  const message = finalScore >= 8 ? 'Trails are prime!' : finalScore >= 6 ? 'Good day to ride.' : finalScore >= 4 ? 'Rideable with caution.' : finalScore >= 3 ? 'Challenging trail conditions.' : 'Not recommended today.';
+  return {
+    score: finalScore,
+    message,
+    breakdown: { windPenalty: Math.round(windPenalty * 10) / 10, temperaturePenalty: tempPenalty, humidityPenalty, visibilityPenalty }
+  };
+}
+
 
