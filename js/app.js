@@ -9,6 +9,26 @@ const state = {
   units: 'C' // 'C' | 'F'
 };
 
+// Persisted preferences
+const UNITS_KEY = 'w4b:units';
+
+function loadUnitsFromStorage() {
+  try {
+    const v = localStorage.getItem(UNITS_KEY);
+    return v === 'C' || v === 'F' ? v : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveUnitsToStorage(units) {
+  try {
+    localStorage.setItem(UNITS_KEY, units);
+  } catch (e) {
+    // ignore storage errors (private mode, etc.)
+  }
+}
+
 // Elements
 const locationIndicator = document.getElementById('location-indicator');
 const appTitle = document.getElementById('app-title');
@@ -34,6 +54,9 @@ let dailyTempChart = null;
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
+  // Load persisted units before wiring UI so initial render reflects preference
+  const savedUnits = loadUnitsFromStorage();
+  if (savedUnits) state.units = savedUnits;
   bindUI();
   initScenicImageFallback();
   try {
@@ -123,11 +146,13 @@ function bindUI() {
   if (cBtn && fBtn) {
     cBtn.addEventListener('click', () => {
       state.units = 'C';
+      saveUnitsToStorage('C');
       updateUnitsToggleUI();
       renderAll();
     });
     fBtn.addEventListener('click', () => {
       state.units = 'F';
+      saveUnitsToStorage('F');
       updateUnitsToggleUI();
       renderAll();
     });
@@ -373,8 +398,9 @@ function renderInsights() {
   score = clamp(score, 0, 100);
   const { label, emoji, colorClass } = scoreToLabel(score);
   const classes = scoreColorClasses(score);
+  const activityIcon = state.activity === 'road' ? '🚴🏼‍♂️' : (state.activity === 'gravel' ? '🚴🏼' : '🚵🏼‍♀️');
   header.innerHTML = `
-    <div class="text-sm text-gray-500 dark:text-gray-400">Selected: <span class="font-medium capitalize">${state.activity}</span></div>
+    <div class="text-sm text-gray-500 dark:text-gray-400">Selected: <span class="mr-1">${activityIcon}</span><span class="font-medium capitalize">${state.activity}</span></div>
     <div class="inline-flex items-center gap-2 ${classes.bg} ${classes.text} px-3 py-1 rounded-full text-sm font-medium shadow-sm">${emoji} <span>${score} – ${label}</span></div>
   `;
 
