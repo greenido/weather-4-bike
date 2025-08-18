@@ -5,7 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Weather 4 Bike</title>
     <meta name="description" content="Cycling-specific weather insights for road, gravel, and MTB.">
-    <link rel="icon" href="assets/images/favicon.ico">
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/favicon_io/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon_io/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon_io/favicon-16x16.png">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="assets/favicon_io/favicon.ico">
     <!-- Tailwind via CDN for MVP; can be replaced with compiled CSS later -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -78,14 +82,7 @@
         </div>
       </header>
 
-      <!-- Activity Selector -->
-      <section class="mb-4">
-        <div class="inline-flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700" role="tablist" aria-label="Select cycling activity">
-          <button id="activity-road" data-activity="road" class="px-4 py-2 text-road font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="true">Road</button>
-          <button id="activity-gravel" data-activity="gravel" class="px-4 py-2 text-gravel font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="false">Gravel</button>
-          <button id="activity-mtb" data-activity="mtb" class="px-4 py-2 text-mtb font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="false">MTB</button>
-        </div>
-      </section>
+      
 
       <!-- Main Content -->
       <main class="grid grid-cols-1 gap-4 items-start">
@@ -101,8 +98,15 @@
         </section>
 
         <!-- Detailed Insights -->
-        <section class="rounded-lg shadow-lg p-4 bg-white/90 dark:bg-gray-800/90 backdrop-blur">
-          <h2 class="text-lg font-semibold mb-3">Activity Insights</h2>
+        <section id="insights-card" class="rounded-lg shadow-lg p-4 bg-white/90 dark:bg-gray-800/90 backdrop-blur">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-lg font-semibold">Activity Insights</h2>
+            <div class="inline-flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700" role="tablist" aria-label="Select cycling activity">
+              <button id="activity-road" data-activity="road" class="px-4 py-2 text-road font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="true">Road</button>
+              <button id="activity-gravel" data-activity="gravel" class="px-4 py-2 text-gravel font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="false">Gravel</button>
+              <button id="activity-mtb" data-activity="mtb" class="px-4 py-2 text-mtb font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="false">MTB</button>
+            </div>
+          </div>
           <div id="insights" class="space-y-3"></div>
         </section>
 

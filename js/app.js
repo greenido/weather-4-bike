@@ -324,6 +324,16 @@ function renderCurrent() {
 function renderInsights() {
   if (!state.weather) return;
   insightsContainer.innerHTML = '';
+  // Update insights card background based on selected activity
+  const insightsCard = document.getElementById('insights-card');
+  if (insightsCard) {
+    const base = 'rounded-lg shadow-lg p-4 backdrop-blur';
+    let bg = 'bg-white/90 dark:bg-gray-800/90';
+    if (state.activity === 'road') bg = 'bg-gradient-to-r from-blue-50 to-blue-100 dark:from-gray-800 dark:to-gray-700';
+    if (state.activity === 'gravel') bg = 'bg-gradient-to-r from-orange-50 to-orange-100 dark:from-gray-800 dark:to-gray-700';
+    if (state.activity === 'mtb') bg = 'bg-gradient-to-r from-emerald-50 to-green-100 dark:from-gray-800 dark:to-gray-700';
+    insightsCard.className = `${base} ${bg}`;
+  }
   const alerts = generateSafetyAlerts(state.weather);
   const alertsDiv = document.createElement('div');
   alertsDiv.className = 'space-y-2';
