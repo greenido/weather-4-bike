@@ -1,4 +1,18 @@
-// Weather API integration for Open-Meteo
+/*
+  Weather 4 Bike – Weather Data Provider (Open‑Meteo)
+
+  Goal: Fetch forecast data and shape it into a UI-friendly structure with
+  current, hourly, and daily slices plus useful derived text.
+
+  Why: Separating data access/formatting from UI keeps rendering simple and
+  enables easy swapping or augmentation of data sources.
+
+  How:
+  - Call Open‑Meteo with a robust set of hourly variables, falling back to a
+    reduced set when some are unsupported.
+  - Parse the response into `current`, `hourly`, `daily`, and `next24FromNearest`.
+  - Add human-readable `weatherText` for codes and filter daily to the next 7 days.
+*/
 
 const HOURLY_PARAMS = [
   'temperature_2m',
@@ -23,6 +37,13 @@ const DAILY_PARAMS = [
   'uv_index_max'
 ].join(',');
 
+/**
+ * Goal: Fetch 7‑day forecast data for given coordinates and return
+ *       a normalized, UI‑friendly object.
+ * Why: The UI expects consistent shapes and derived text across views.
+ * How: Try a full hourly variable set with Open‑Meteo, fall back to a reduced
+ *      set on failure, then parse and format the response.
+ */
 export async function fetchWeatherData(latitude, longitude) {
   const base = 'https://api.open-meteo.com/v1/forecast';
   const buildUrl = (hourlyParams) => `${base}?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}&hourly=${hourlyParams}&daily=${DAILY_PARAMS}&timezone=auto&forecast_days=7&past_days=2`;
@@ -63,6 +84,12 @@ export async function fetchWeatherData(latitude, longitude) {
   throw lastError || new Error('Weather API error');
 }
 
+/**
+ * Goal: Transform raw Open‑Meteo JSON into structured current/hourly/daily arrays.
+ * Why: Downstream code needs aligned indices and easy access to the "nearest hour".
+ * How: Locate the hour closest to now, assemble objects with null‑safe accessors,
+ *      and precompute `next24FromNearest` for the hourly view.
+ */
 export function parseWeatherResponse(data) {
   const now = new Date();
   const times = data.hourly?.time || [];
@@ -116,6 +143,12 @@ export function parseWeatherResponse(data) {
   return { current, hourly, daily, nearestIndex, next24FromNearest };
 }
 
+/**
+ * Goal: Add human text for weather codes and trim daily data to future days.
+ * Why: Improves readability and avoids showing past days in the 7‑day view.
+ * How: Map `weatherCode` to text for current/hourly/daily, and filter daily by
+ *      local date >= today, keeping up to 7 entries.
+ */
 export function formatWeatherData(raw) {
   // Compute local YYYY-MM-DD string for today to filter out past days
   const now = new Date();
@@ -150,6 +183,11 @@ function getSafe(arr, idx) {
   return Array.isArray(arr) ? arr[idx] ?? null : null;
 }
 
+/**
+ * Goal: Find the index of the hourly time closest to `now`.
+ * Why: Aligns "current" conditions with the nearest forecast hour.
+ * How: Linear scan comparing absolute time deltas; return best index or 0.
+ */
 function findNearestHourIndex(times, now) {
   if (!Array.isArray(times) || times.length === 0) return 0;
   const nowMs = now.getTime();
@@ -166,6 +204,11 @@ function findNearestHourIndex(times, now) {
   return bestIdx;
 }
 
+/**
+ * Goal: Convert Open‑Meteo weather codes to human‑readable text.
+ * Why: Users should see meaningful condition names instead of numeric codes.
+ * How: Lookup in a static map; default to 'Unknown' for missing entries.
+ */
 export function mapWeatherCodeToText(code) {
   const lookup = {
     0: 'Clear sky',

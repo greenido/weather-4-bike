@@ -1,3 +1,21 @@
+/*
+  Weather 4 Bike – Application Orchestrator (UI Controller)
+
+  Goal: Tie together location lookup, weather fetching, and riding insights to render
+  an interactive, accessible UI. This module owns app state, binds UI events, and
+  renders all top-level views (current, insights, hourly, daily, charts).
+
+  Why: Centralizing UI logic and state makes it easier to understand the flow from
+  user actions (pick a city, toggle activity/units) to data fetching and rendering.
+
+  How:
+  - Keep a small `state` object for activity, selected location, loaded weather, units.
+  - On load, restore preferences and either use last/geo location, then fetch weather.
+  - Render discrete sections with pure render functions; re-render on state changes.
+  - Defer domain calculations (scores/alerts) to `insights.js` and data access to
+    `weather.js` and `location.js`.
+*/
+
 import { fetchWeatherData } from './weather.js';
 import { getCurrentLocation, searchCities, saveRecentLocation, getRecentLocations, clearRecentLocations, reverseGeocode, setLastLocation, getLastLocation } from './location.js';
 import { calculateRoadCyclingScore, calculateGravelConditions, calculateMTBTrailReadiness, generateSafetyAlerts, applyEnvironmentalPenalties, calculateBikeScoreFromWeather, calculateGravelScoreFromWeather, calculateMTBScoreFromWeather } from './insights.js';
@@ -53,6 +71,11 @@ const toast = document.getElementById('toast');
 let dailyTempChart = null;
 
 // Init
+/**
+ * Goal: Bootstrap the app when the DOM is ready.
+ * Why: We must bind events and load initial data only after the UI is available.
+ * How: Restore units, wire UI, resolve last/geo location, fetch weather, then render.
+ */
 document.addEventListener('DOMContentLoaded', async () => {
   // Load persisted units before wiring UI so initial render reflects preference
   const savedUnits = loadUnitsFromStorage();
@@ -78,6 +101,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderRecentsDropdown();
 });
 
+/**
+ * Goal: Register all event handlers and interactive behaviors.
+ * Why: Keeps wiring concerns in one place so the render functions stay focused.
+ * How: Attach click/input listeners for activity, search, recents, units, and modals.
+ */
 function bindUI() {
   activityButtons.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -162,6 +190,11 @@ function bindUI() {
 }
 
 // Visually highlight the active units toggle
+/**
+ * Goal: Reflect the active units selection in the UI.
+ * Why: Visual feedback helps users understand which measurement system is active.
+ * How: Toggle classes/ARIA on the °C/°F buttons based on current `state.units`.
+ */
 function updateUnitsToggleUI() {
   const cBtn = document.getElementById('units-c');
   const fBtn = document.getElementById('units-f');
@@ -183,6 +216,11 @@ function updateUnitsToggleUI() {
   }
 }
 
+/**
+ * Goal: Handle debounced city search input.
+ * Why: Avoid spamming the geocoding API on every keystroke; show useful results.
+ * How: When >=3 chars, query `searchCities` and render a dropdown of candidates.
+ */
 async function onSearchChanged() {
   const q = citySearchInput.value.trim();
   if (q.length < 3) {
@@ -198,6 +236,11 @@ async function onSearchChanged() {
   }
 }
 
+/**
+ * Goal: Present geocoding results for quick selection.
+ * Why: Lets users switch locations without leaving the page.
+ * How: Build a list of buttons; on click, load weather for the chosen city.
+ */
 function renderSearchResults(cities) {
   searchResults.innerHTML = '';
   if (!cities.length) {
@@ -221,6 +264,11 @@ function renderSearchResults(cities) {
   searchResults.classList.remove('hidden');
 }
 
+/**
+ * Goal: Fetch weather for a location and update all UI.
+ * Why: Central data-loading entry point reused by search, recents, and geolocation.
+ * How: Save selection (recents/last), fetch via `fetchWeatherData`, then `renderAll`.
+ */
 async function loadWeather(location) {
   state.location = location;
   setLocationIndicator(`${location.name}${location.region ? ', ' + location.region : ''}${location.country ? ', ' + location.country : ''}`);
@@ -257,6 +305,11 @@ async function loadWeather(location) {
   }
 }
 
+/**
+ * Goal: Re-render all UI sections based on current `state`.
+ * Why: Ensures derived UIs stay consistent after any state change.
+ * How: Delegate to section renderers; also refresh chart and recents.
+ */
 function renderAll() {
   renderCurrent();
   renderInsights();
@@ -266,6 +319,11 @@ function renderAll() {
   renderRecentsDropdown();
 }
 
+/**
+ * Goal: Load a scenic Unsplash photo as a visual fallback/header.
+ * Why: Enhances aesthetics when no hero image is present.
+ * How: Fetch a random landscape using an access key; hide if unavailable.
+ */
 function initScenicImageFallback() {
   const img = document.getElementById('scenic-image');
   if (!img) return;
@@ -308,6 +366,11 @@ function initScenicImageFallback() {
     .catch(() => setHidden());
 }
 
+/**
+ * Goal: Show current conditions summary.
+ * Why: Riders need at-a-glance temperature, wind, UV, and visibility right now.
+ * How: Read `state.weather.current` and populate a small grid of key metrics.
+ */
 function renderCurrent() {
   const c = state.weather?.current;
   if (!c) return;
@@ -346,6 +409,11 @@ function renderCurrent() {
   });
 }
 
+/**
+ * Goal: Present bike-activity insights and safety alerts.
+ * Why: Translate raw weather into rideability scores and practical guidance.
+ * How: Compute scores with `insights.js`, build a card with factors and tips.
+ */
 function renderInsights() {
   if (!state.weather) return;
   insightsContainer.innerHTML = '';
@@ -495,6 +563,11 @@ function renderInsights() {
   }
 }
 
+/**
+ * Goal: Display the next 24 hours forecast.
+ * Why: Hourly trends (temp, rain, wind) help plan timing of a ride.
+ * How: Take `next24FromNearest` or first 24 hourly entries and render tiles.
+ */
 function renderHourly() {
   hourlyContainer.innerHTML = '';
   if (!state.weather) return;
@@ -516,6 +589,11 @@ function renderHourly() {
   });
 }
 
+/**
+ * Goal: Show a 7‑day outlook.
+ * Why: Give riders a sense of the week to schedule longer efforts.
+ * How: Render each day with icon, text, max/min, precip and wind cues.
+ */
 function renderDaily() {
   dailyContainer.innerHTML = '';
   if (!state.weather) return;
@@ -533,6 +611,11 @@ function renderDaily() {
   });
 }
 
+/**
+ * Goal: Plot daily max/min temperatures.
+ * Why: Visual temperature trends are easier to scan than numbers alone.
+ * How: Use Chart.js if present; convert values to selected units and label points.
+ */
 function renderDailyTempChart() {
   const canvas = document.getElementById('daily-temp-chart');
   if (!canvas || !state.weather || !Array.isArray(state.weather.daily)) return;
@@ -635,6 +718,11 @@ function renderDailyTempChart() {
   });
 }
 
+/**
+ * Goal: Let the user quickly reselect a recent location.
+ * Why: Commonly revisited places should be one click away.
+ * How: Read recent items from storage and render a small menu with Clear.
+ */
 function renderRecentsDropdown() {
   const recents = getRecentLocations();
   recentsList.innerHTML = '';
@@ -670,7 +758,7 @@ function renderRecentsDropdown() {
   });
 }
 
-// Utils
+// Utils – shared helpers for formatting and safe operations used across renderers
 function setLocationIndicator(text) {
   if (!locationIndicator) return;
   const trimmed = trimLocationText(text);
@@ -691,6 +779,11 @@ function hideToast() {
   toast.classList.add('hidden');
 }
 
+/**
+ * Goal: Limit how often a function runs during bursts of events.
+ * Why: Improves performance and respects API rate limits.
+ * How: Reset a timer on each call; invoke after `delay` ms of inactivity.
+ */
 function debounce(fn, delay) {
   let t;
   return (...args) => {
@@ -811,7 +904,7 @@ function aIcon(type) {
   }
 }
 
-// Weather icon path mapping to flaticon-like assets under assets/icons/weather/
+// Weather icon path mapping to assets under `assets/icons/weather2/static/`
 function getWeatherIconPath(code) {
   const map = {
     0: 'sun', // clear
@@ -828,6 +921,11 @@ function getWeatherIconPath(code) {
   return `assets/icons/weather2/static/${name}.svg`;
 }
 
+/**
+ * Goal: Render an <img> for a weather code with robust fallbacks.
+ * Why: Icon sets may vary; we try alternative filenames if the primary is missing.
+ * How: Build candidate paths based on a base name and set inline onerror fallbacks.
+ */
 function createWeatherIconImg(code, cls) {
   const basePath = getWeatherIconPath(code);
   const baseName = basePath.split('/').pop().replace('.svg','');

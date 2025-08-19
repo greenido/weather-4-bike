@@ -1,9 +1,28 @@
-// Location handling: geolocation, geocoding search, and recent locations
+/*
+  Weather 4 Bike – Location Services
+
+  Goal: Provide location capabilities: current geolocation, forward geocoding
+  (search), reverse geocoding, and persistence of recent/last locations.
+
+  Why: The app revolves around a user’s place. Keeping all location I/O and
+  storage concerns together makes flows predictable and testable.
+
+  How:
+  - Thin wrappers over browser geolocation and public geocoding APIs.
+  - Normalize response shapes for the UI and persist a small recents list.
+  - Expose pure functions; no DOM manipulation here.
+*/
 
 const RECENTS_KEY = 'w4b_recent_locations_v1';
 const LAST_KEY = 'w4b_last_location_v1';
 const MAX_RECENTS = 15;
 
+/**
+ * Goal: Obtain the user's current geolocation coordinates.
+ * Why: Enables one-tap weather for where the rider is.
+ * How: Wrap `navigator.geolocation.getCurrentPosition` in a Promise and return
+ *      latitude, longitude, and accuracy.
+ */
 export function getCurrentLocation(options = { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }) {
   return new Promise((resolve, reject) => {
     if (!('geolocation' in navigator)) {
@@ -24,6 +43,12 @@ export function getCurrentLocation(options = { enableHighAccuracy: true, timeout
   });
 }
 
+/**
+ * Goal: Forward-geocode a text query into candidate cities.
+ * Why: Let users change the forecast location by name.
+ * How: Call Open‑Meteo geocoding API, normalize fields used by the app, and
+ *      return up to 10 results.
+ */
 export async function searchCities(query) {
   const trimmed = (query || '').trim();
   if (trimmed.length < 3) return [];
@@ -44,6 +69,11 @@ export async function searchCities(query) {
   }));
 }
 
+/**
+ * Goal: Reverse-geocode coordinates into a human-readable place.
+ * Why: Useful after geolocation to display city/region names.
+ * How: Use BigDataCloud’s public endpoint and map fields to our standard shape.
+ */
 export async function reverseGeocode(latitude, longitude) {
   // Use BigDataCloud public reverse geocoding (CORS enabled, no key required)
   const base = 'https://api.bigdatacloud.net/data/reverse-geocode-client';
@@ -64,6 +94,12 @@ export async function reverseGeocode(latitude, longitude) {
   };
 }
 
+/**
+ * Goal: Persist a location in the recents list.
+ * Why: Quick access to previously viewed places.
+ * How: De-duplicate by id/name, keep newest first, cap to MAX_RECENTS, store in
+ *      localStorage.
+ */
 export function saveRecentLocation(location) {
   try {
     const recents = getRecentLocationsInternal();
@@ -76,6 +112,11 @@ export function saveRecentLocation(location) {
   }
 }
 
+/**
+ * Goal: Read the recent locations list.
+ * Why: Populate the recents dropdown in the UI.
+ * How: Parse from localStorage and sanitize; return an empty list on errors.
+ */
 export function getRecentLocations() {
   try {
     return getRecentLocationsInternal();
@@ -84,6 +125,11 @@ export function getRecentLocations() {
   }
 }
 
+/**
+ * Goal: Clear persisted recents.
+ * Why: Give users control to reset their history.
+ * How: Remove the localStorage key; ignore storage errors gracefully.
+ */
 export function clearRecentLocations() {
   try {
     localStorage.removeItem(RECENTS_KEY);
@@ -116,7 +162,11 @@ function normalizeName(name) {
   return String(name || '').trim().toLowerCase();
 }
 
-// Persist last selected location
+/**
+ * Goal: Persist the last selected location.
+ * Why: Restore the user’s context on the next visit.
+ * How: Normalize and store a small object in localStorage under `LAST_KEY`.
+ */
 export function setLastLocation(location) {
   try {
     const payload = {
@@ -134,6 +184,11 @@ export function setLastLocation(location) {
   }
 }
 
+/**
+ * Goal: Retrieve the last selected location if available.
+ * Why: Prefer continuity for returning users.
+ * How: Parse from localStorage, validate shape and types, else return null.
+ */
 export function getLastLocation() {
   try {
     const raw = localStorage.getItem(LAST_KEY);

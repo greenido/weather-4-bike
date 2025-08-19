@@ -1,5 +1,25 @@
-// Cycling-specific insights and safety alerts
+/*
+  Weather 4 Bike – Cycling Insights (Domain Logic)
 
+  Goal: Convert raw weather into cycling-friendly insights: safety alerts and
+  rideability scores for road, gravel, and MTB.
+
+  Why: Riders need decisions, not just numbers. This module encapsulates the
+  heuristics so the UI can stay simple and declarative.
+
+  How:
+  - Provide scoring functions that map weather inputs to 1–10 (and legacy 0–100)
+    scales with transparent breakdowns.
+  - Provide a small ruleset for safety alerts based on thresholds.
+  - Keep pure functions with no DOM or storage side effects.
+*/
+
+/**
+ * Goal: Estimate a 0–100 road-cycling score from key weather inputs.
+ * Why: Legacy score still used in parts of the UI and useful for comparisons.
+ * How: Compute temperature, wind, precipitation components, apply small UV penalty,
+ *      then blend with weights and clamp to 0–100.
+ */
 export function calculateRoadCyclingScore(weatherData) {
   const c = weatherData.current;
   // Temperature score (optimal 10-25°C)
@@ -24,6 +44,12 @@ export function calculateRoadCyclingScore(weatherData) {
   return Math.round(clamp(score, 0, 100));
 }
 
+/**
+ * Goal: Summarize gravel conditions (mud factor + comfort).
+ * Why: Recent rain strongly affects gravel surfaces; temp drives comfort.
+ * How: Sum recent precipitation over 48h to derive a mudFactor (0–3), and compute
+ *      a comfort score from temperature using `scoreRange`.
+ */
 export function calculateGravelConditions(weatherData) {
   const last48h = estimateRecentPrecipSum(weatherData, 48);
   const temp = weatherData.current.temperature;
@@ -37,6 +63,12 @@ export function calculateGravelConditions(weatherData) {
   return { mudFactor, comfort: clamp(comfort, 0, 100) };
 }
 
+/**
+ * Goal: Rate MTB trail readiness on a 0–100 scale.
+ * Why: MTB is sensitive to trail drying time, humidity, wind, and comfort.
+ * How: Start from 100 and subtract penalties for recent precipitation, extreme
+ *      humidity, strong wind; nudge by a temperature comfort component; clamp.
+ */
 export function calculateMTBTrailReadiness(weatherData) {
   const last72h = estimateRecentPrecipSum(weatherData, 72);
   const humidityNow = weatherData.hourly[0]?.humidity ?? weatherData.current.humidity ?? 50;
@@ -61,6 +93,12 @@ export function calculateMTBTrailReadiness(weatherData) {
   return Math.round(clamp(score, 0, 100));
 }
 
+/**
+ * Goal: Produce a list of safety alerts for the rider.
+ * Why: Make hazards obvious so riders can adapt gear, route, or timing.
+ * How: Evaluate thresholds on wind, visibility, precipitation, and temperature
+ *      extremes; return typed alerts with severity and message.
+ */
 export function generateSafetyAlerts(weatherData) {
   const alerts = [];
   const c = weatherData.current;
@@ -74,7 +112,7 @@ export function generateSafetyAlerts(weatherData) {
   return alerts;
 }
 
-// Helpers
+// Helpers – pure utilities underpinning the scoring rules
 function estimateRecentPrecipSum(weatherData, hoursBack) {
   const now = new Date();
   const cutoff = new Date(now.getTime() - hoursBack * 3600 * 1000);
@@ -113,7 +151,11 @@ function kph(kmh) {
   return Math.round(kmh * 10) / 10;
 }
 
-// Apply global environment penalties to any 0-100 score
+/**
+ * Goal: Adjust a 0–100 base score for uncomfortable environments.
+ * Why: Heat/cold and humidity compound other factors and should be reflected globally.
+ * How: Subtract capped penalties using temperature and relative humidity thresholds.
+ */
 export function applyEnvironmentalPenalties(baseScore, weatherData) {
   let score = baseScore;
   const c = weatherData.current || {};
@@ -140,7 +182,12 @@ export function applyEnvironmentalPenalties(baseScore, weatherData) {
   return clamp(Math.round(score), 0, 100);
 }
 
-// New: Road bike score algorithm (1-10) based on wind, temperature, humidity, visibility
+/**
+ * Goal: Produce a 1–10 road bike score and an explanation.
+ * Why: Summarizes rideability at a glance with actionable context.
+ * How: Start at 10 and subtract penalties for wind, temperature, humidity, visibility,
+ *      and UV, with caps for extreme conditions.
+ */
 export function calculateBikeScore(windSpeedKmh, windDirectionRelation, temperatureC, humidityPct, visibilityKm, uvIndex = 0) {
   let totalScore = 10.0;
 
@@ -235,7 +282,11 @@ export function calculateBikeScoreFromWeather(weatherData, windRelation = 'cross
   return calculateBikeScore(windKmh, windRelation, tempC, rh, visKm, uv);
 }
 
-// Gravel: higher wind sensitivity and harsher heat penalties
+/**
+ * Goal: 1–10 gravel score tuned for wind and heat sensitivity.
+ * Why: Gravel riding is more exposed; harsher penalties improve realism.
+ * How: Similar to road score but with 1.5× wind penalty and stronger heat caps.
+ */
 export function calculateGravelScoreFromWeather(weatherData) {
   const c = weatherData.current || {};
   const windKmh = kph(c.windSpeed);
@@ -287,7 +338,11 @@ export function calculateGravelScoreFromWeather(weatherData) {
   };
 }
 
-// MTB: standard wind, harsher heat penalties
+/**
+ * Goal: 1–10 MTB score focused on comfort and visibility on technical terrain.
+ * Why: MTB rides are less wind-limited but still heat/visibility constrained.
+ * How: Standard wind penalties, stronger temperature caps, same visibility/UV rules.
+ */
 export function calculateMTBScoreFromWeather(weatherData) {
   const c = weatherData.current || {};
   const windKmh = kph(c.windSpeed);
