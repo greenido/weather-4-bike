@@ -490,7 +490,7 @@ function renderInsights() {
   const windDir = degToCardinal(c.windDirection ?? 0);
   // Convert to 1–10 scale as an integer
   const tenInt = clamp(Math.round(score / 10), 1, 10);
-  const conditionText = score >= 80 ? 'Excellent riding conditions' : score >= 60 ? 'Good riding conditions' : score >= 40 ? 'Fair riding conditions' : 'Poor riding conditions';
+  const conditionText = score >= 80 ? 'Excellent riding conditions' : score >= 60 ? '~Good riding conditions' : score >= 40 ? 'Quite poor riding conditions' : 'Poor riding conditions';
   const windQualifier = windMph <= 6 ? 'light winds' : windMph <= 12 ? 'mild crosswinds' : 'breezy conditions';
   const labelEl = scoreToLabel(score).label;
 
@@ -841,9 +841,9 @@ function clamp(value, min, max) {
 
 function scoreToLabel(score) {
   if (score >= 80) return { label: 'Excellent', emoji: '🟢', colorClass: 'text-green-600' };
-  if (score >= 60) return { label: 'Good', emoji: '🟡', colorClass: 'text-yellow-600' };
-  if (score >= 40) return { label: 'Fair', emoji: '🟠', colorClass: 'text-orange-600' };
-  return { label: 'Poor', emoji: '🔴', colorClass: 'text-red-600' };
+  if (score >= 60) return { label: '~Good', emoji: '🟡', colorClass: 'text-yellow-600' };
+  if (score >= 40) return { label: 'Poor', emoji: '🟠', colorClass: 'text-orange-600' };
+  return { label: 'Poor Poor', emoji: '🔴', colorClass: 'text-red-600' };
 }
 
 function scoreColorClasses(score) {
