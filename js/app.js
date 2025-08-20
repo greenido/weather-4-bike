@@ -807,6 +807,12 @@ function formatHour(iso) {
 }
 
 function formatDay(iso) {
+  // If `iso` is a date-only string (YYYY-MM-DD), construct as local time to avoid UTC shift
+  if (typeof iso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    const [y, m, d] = iso.split('-').map(Number);
+    const local = new Date(y, m - 1, d);
+    return local.toLocaleDateString([], { weekday: 'short' });
+  }
   const d = new Date(iso);
   return d.toLocaleDateString([], { weekday: 'short' });
 }

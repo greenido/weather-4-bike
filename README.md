@@ -19,6 +19,10 @@ Serve the repo with a static server (needed for module imports):
 # Example using Python
 cd weather-4-bike
 python3 -m http.server 9000
+
+# or
+php -S localhost:9000
+
 # then open http://localhost:9000/
 ```
 
