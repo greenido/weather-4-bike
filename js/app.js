@@ -846,7 +846,7 @@ function scoreToLabel(score) {
   if (score >= 80) return { label: 'Excellent', emoji: '🟢', colorClass: 'text-green-600' };
   if (score >= 60) return { label: '~Good', emoji: '🟡', colorClass: 'text-yellow-600' };
   if (score >= 40) return { label: 'Poor', emoji: '🟠', colorClass: 'text-orange-600' };
-  return { label: 'Poor Poor', emoji: '🔴', colorClass: 'text-red-600' };
+  return { label: 'Poor (go to swim)', emoji: '🔴', colorClass: 'text-red-600' };
 }
 
 function scoreColorClasses(score) {
