@@ -442,7 +442,8 @@ function renderInsights() {
 
   const header = document.createElement('div');
   header.className = 'flex items-center justify-between';
-  let score = 0;
+  let score100 = 0; // internal 0–100 for colors/labels
+  let score10 = 0;  // displayed 1–10 score
   let roadScoreDetail = null;
   let gravelScoreDetail = null;
   let mtbScoreDetail = null;
@@ -450,26 +451,28 @@ function renderInsights() {
     // Use new 1–10 bike score; map to 0–100 for header
     roadScoreDetail = calculateBikeScoreFromWeather(state.weather, 'crosswind');
     const { score: s10 } = roadScoreDetail;
-    score = Math.round(s10 * 10);
+    score10 = s10;
+    score100 = Math.round(s10 * 10);
   }
   if (state.activity === 'gravel') {
     gravelScoreDetail = calculateGravelScoreFromWeather(state.weather);
-    score = Math.round(gravelScoreDetail.score * 10);
+    score10 = gravelScoreDetail.score;
+    score100 = Math.round(gravelScoreDetail.score * 10);
   }
-  if (state.activity === 'mtb') score = calculateMTBTrailReadiness(state.weather);
   if (state.activity === 'mtb') {
     mtbScoreDetail = calculateMTBScoreFromWeather(state.weather);
-    score = Math.round(mtbScoreDetail.score * 10);
+    score10 = mtbScoreDetail.score;
+    score100 = Math.round(mtbScoreDetail.score * 10);
   }
   // Remove extra global penalties to avoid double-counting with new algo
   // Ensure score stays within 0-100 before any downstream usage
-  score = clamp(score, 0, 100);
-  const { label, emoji, colorClass } = scoreToLabel(score);
-  const classes = scoreColorClasses(score);
+  score100 = clamp(score100, 0, 100);
+  const { label, emoji, colorClass } = scoreToLabel(score100);
+  const classes = scoreColorClasses(score100);
   const activityIcon = state.activity === 'road' ? '🚴🏼‍♂️' : (state.activity === 'gravel' ? '🚴🏼' : '🚵🏼‍♀️');
   header.innerHTML = `
     <div class="text-sm text-gray-500 dark:text-gray-400">Selected: <span class="mr-1">${activityIcon}</span><span class="font-medium capitalize">${state.activity}</span></div>
-    <div class="inline-flex items-center gap-2 ${classes.bg} ${classes.text} px-3 py-1 rounded-full text-sm font-medium shadow-sm">${emoji} <span>${score} – ${label}</span></div>
+    <div class="inline-flex items-center gap-2 ${classes.bg} ${classes.text} px-3 py-1 rounded-full text-sm font-medium shadow-sm">${emoji} <span>${score10}/10 – ${label}</span></div>
   `;
 
   insightsContainer.appendChild(header);
@@ -489,10 +492,10 @@ function renderInsights() {
   const visMi = Math.round(kmToMi((c.visibility ?? 0) / 1000));
   const windDir = degToCardinal(c.windDirection ?? 0);
   // Convert to 1–10 scale as an integer
-  const tenInt = clamp(Math.round(score / 10), 1, 10);
-  const conditionText = score >= 80 ? 'Excellent riding conditions' : score >= 60 ? '~Good riding conditions' : score >= 40 ? 'Quite poor riding conditions' : 'Poor riding conditions';
+  const tenInt = clamp(Math.round(score100 / 10), 1, 10);
+  const conditionText = score100 >= 80 ? 'Excellent riding conditions' : score100 >= 60 ? '~Good riding conditions' : score100 >= 40 ? 'Quite poor riding conditions' : 'Poor riding conditions';
   const windQualifier = windMph <= 6 ? 'light winds' : windMph <= 12 ? 'mild crosswinds' : 'breezy conditions';
-  const labelEl = scoreToLabel(score).label;
+  const labelEl = scoreToLabel(score100).label;
 
   const bikeTile = document.createElement('section');
   bikeTile.className = 'mt-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4 bg-gradient-to-r from-emerald-50 to-green-100 dark:from-gray-800 dark:to-gray-700';

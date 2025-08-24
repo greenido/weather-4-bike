@@ -1,46 +1,39 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- (c) ammap.com | SVG weather icons -->
-<svg
-    version="1.1"
-    xmlns="http://www.w3.org/2000/svg"
-    xmlns:xlink="http://www.w3.org/1999/xlink"
-    width="64"
-    height="64"
-    viewbox="0 0 64 64">
-    <defs>
-        <filter id="blur" width="200%" height="200%">
-            <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
-            <feOffset dx="0" dy="4" result="offsetblur"/>
-            <feComponentTransfer>
-                <feFuncA type="linear" slope="0.05"/>
-            </feComponentTransfer>
-            <feMerge> 
-                <feMergeNode/>
-                <feMergeNode in="SourceGraphic"/> 
-            </feMerge>
-        </filter>
-    </defs>
-    <g filter="url(#blur)" id="snowy-5">
-        <g transform="translate(20,10)">
-            <g class="am-weather-cloud-2">
-                <path d="M47.7,35.4c0-4.6-3.7-8.2-8.2-8.2c-1,0-1.9,0.2-2.8,0.5c-0.3-3.4-3.1-6.2-6.6-6.2c-3.7,0-6.7,3-6.7,6.7c0,0.8,0.2,1.6,0.4,2.3    c-0.3-0.1-0.7-0.1-1-0.1c-3.7,0-6.7,3-6.7,6.7c0,3.6,2.9,6.6,6.5,6.7l17.2,0C44.2,43.3,47.7,39.8,47.7,35.4z" fill="#57A0EE" stroke="#FFFFFF" stroke-linejoin="round" stroke-width="1.2" transform="translate(-20,-11)"/>
-            </g>
-            <g class="am-weather-snow-1">
-                <g transform="translate(7,28)">
-                    <line fill="none" stroke="#57A0EE" stroke-linecap="round" stroke-width="1.2" transform="translate(0,9), rotate(0)" x1="0" x2="0" y1="-2.5" y2="2.5" />
-                    <line fill="none" stroke="#57A0EE" stroke-linecap="round" stroke-width="1" transform="translate(0,9), rotate(45)" x1="0" x2="0" y1="-2.5" y2="2.5" />
-                    <line fill="none" stroke="#57A0EE" stroke-linecap="round" stroke-width="1" transform="translate(0,9), rotate(90)" x1="0" x2="0" y1="-2.5" y2="2.5" />
-                    <line fill="none" stroke="#57A0EE" stroke-linecap="round" stroke-width="1" transform="translate(0,9), rotate(135)" x1="0" x2="0" y1="-2.5" y2="2.5" />
-                </g>
-            </g>
-            <g class="am-weather-snow-2">
-                <g transform="translate(16,28)">
-                    <line fill="none" stroke="#57A0EE" stroke-linecap="round" stroke-width="1.2" transform="translate(0,9), rotate(0)" x1="0" x2="0" y1="-2.5" y2="2.5" />
-                    <line fill="none" stroke="#57A0EE" stroke-linecap="round" stroke-width="1" transform="translate(0,9), rotate(45)" x1="0" x2="0" y1="-2.5" y2="2.5" />
-                    <line fill="none" stroke="#57A0EE" stroke-linecap="round" stroke-width="1" transform="translate(0,9), rotate(90)" x1="0" x2="0" y1="-2.5" y2="2.5" />
-                    <line fill="none" stroke="#57A0EE" stroke-linecap="round" stroke-width="1" transform="translate(0,9), rotate(135)" x1="0" x2="0" y1="-2.5" y2="2.5" />
-                </g>
-            </g>
-        </g>
-    </g>
+<svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="120" height="120" fill="#e8f5e8" rx="8"/>
+  
+  <!-- Cloud -->
+  <g transform="translate(20, 15)">
+    <!-- Main cloud body -->
+    <circle cx="40" cy="35" r="18" fill="#6ba3f5"/>
+    <circle cx="25" cy="45" r="15" fill="#6ba3f5"/>
+    <circle cx="55" cy="45" r="12" fill="#6ba3f5"/>
+    <!-- Cloud shadow/depth -->
+    <circle cx="40" cy="35" r="18" fill="#5a94e6" opacity="0.3"/>
+    <circle cx="25" cy="45" r="15" fill="#5a94e6" opacity="0.3"/>
+    <circle cx="55" cy="45" r="12" fill="#5a94e6" opacity="0.3"/>
+  </g>
+  
+  <!-- Fog lines (many horizontal wavy lines to show low visibility) -->
+  <g transform="translate(15, 65)" fill="none" stroke="#a8c8f0" stroke-width="2.5" stroke-linecap="round">
+    <!-- Dense fog layers -->
+    <path d="M10 0 Q20 -2 30 0 Q40 2 50 0 Q60 -2 70 0 Q80 2 90 0" opacity="0.9"/>
+    <path d="M5 6 Q15 4 25 6 Q35 8 45 6 Q55 4 65 6 Q75 8 85 6 Q95 4 100 6" opacity="0.8"/>
+    <path d="M15 12 Q25 10 35 12 Q45 14 55 12 Q65 10 75 12 Q85 14 90 12" opacity="0.9"/>
+    <path d="M8 18 Q18 16 28 18 Q38 20 48 18 Q58 16 68 18 Q78 20 88 18 Q98 16 105 18" opacity="0.7"/>
+    <path d="M20 24 Q30 22 40 24 Q50 26 60 24 Q70 22 80 24 Q90 26 95 24" opacity="0.8"/>
+    <path d="M12 30 Q22 28 32 30 Q42 32 52 30 Q62 28 72 30 Q82 32 92 30" opacity="0.9"/>
+    <path d="M6 36 Q16 34 26 36 Q36 38 46 36 Q56 34 66 36 Q76 38 86 36 Q96 34 102 36" opacity="0.6"/>
+    <path d="M18 42 Q28 40 38 42 Q48 44 58 42 Q68 40 78 42 Q88 44 93 42" opacity="0.8"/>
+    <path d="M10 48 Q20 46 30 48 Q40 50 50 48 Q60 46 70 48 Q80 50 90 48" opacity="0.7"/>
+  </g>
+  
+  <!-- Additional fog wisps for extra density -->
+  <g transform="translate(10, 68)" fill="none" stroke="#b5d1f5" stroke-width="1.5" stroke-linecap="round">
+    <path d="M0 8 Q10 6 20 8 Q30 10 40 8 Q50 6 60 8" opacity="0.5"/>
+    <path d="M85 15 Q95 13 105 15 Q115 17 120 15" opacity="0.4"/>
+    <path d="M0 25 Q15 23 30 25 Q45 27 60 25" opacity="0.6"/>
+    <path d="M70 32 Q80 30 90 32 Q100 34 110 32" opacity="0.5"/>
+    <path d="M5 40 Q20 38 35 40 Q50 42 65 40" opacity="0.4"/>
+  </g>
 </svg>
