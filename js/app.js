@@ -29,6 +29,7 @@ const state = {
 
 // Persisted preferences
 const UNITS_KEY = 'w4b:units';
+const THEME_KEY = 'w4b:theme';
 
 function loadUnitsFromStorage() {
   try {
@@ -44,6 +45,47 @@ function saveUnitsToStorage(units) {
     localStorage.setItem(UNITS_KEY, units);
   } catch (e) {
     // ignore storage errors (private mode, etc.)
+  }
+}
+
+function loadThemeFromStorage() {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    return v === 'light' || v === 'dark' ? v : 'dark'; // default to dark
+  } catch (e) {
+    return 'dark';
+  }
+}
+
+function saveThemeToStorage(theme) {
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch (e) {
+    // ignore storage errors (private mode, etc.)
+  }
+}
+
+function setTheme(theme) {
+  const html = document.documentElement;
+  if (theme === 'dark') {
+    html.classList.add('dark');
+  } else {
+    html.classList.remove('dark');
+  }
+  updateThemeToggleUI(theme);
+  saveThemeToStorage(theme);
+}
+
+function updateThemeToggleUI(theme) {
+  const darkIcon = document.getElementById('theme-toggle-dark-icon');
+  const lightIcon = document.getElementById('theme-toggle-light-icon');
+
+  if (theme === 'dark') {
+    darkIcon?.classList.add('hidden');
+    lightIcon?.classList.remove('hidden');
+  } else {
+    darkIcon?.classList.remove('hidden');
+    lightIcon?.classList.add('hidden');
   }
 }
 
@@ -80,6 +122,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load persisted units before wiring UI so initial render reflects preference
   const savedUnits = loadUnitsFromStorage();
   if (savedUnits) state.units = savedUnits;
+
+  // Load persisted theme and apply it
+  const savedTheme = loadThemeFromStorage();
+  setTheme(savedTheme);
+
   bindUI();
   initScenicImageFallback();
   try {
@@ -186,6 +233,17 @@ function bindUI() {
     });
     // Initialize visual state
     updateUnitsToggleUI();
+  }
+
+  // Theme toggle
+  const themeToggle = document.getElementById('theme-toggle');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      const html = document.documentElement;
+      const currentTheme = html.classList.contains('dark') ? 'dark' : 'light';
+      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+      setTheme(newTheme);
+    });
   }
 }
 
