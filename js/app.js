@@ -583,7 +583,7 @@ function renderHourly() {
     d.className = 'min-w-[90px] rounded-md bg-gray-50 dark:bg-gray-700 p-3 text-center';
     d.innerHTML = `
       <div class="text-xs text-gray-500 dark:text-gray-300">${formatHour(h.time)}</div>
-      <div class="flex justify-center mb-1">${createWeatherIconImg(h.weatherCode, 'w-6 h-6')}</div>
+      <div class="flex justify-center mb-1">${createWeatherIconImg(h.weatherCode, 'w-8 h-8')}</div>
       <div class="text-lg font-semibold">${formatTemp(h.temperature)}</div>
       <div class="text-xs">${Math.round(h.precipitationProbability ?? 0)}% rain</div>
       <div class="text-xs">${Math.round(h.windSpeed ?? 0)} km/h</div>
@@ -602,14 +602,34 @@ function renderDaily() {
   if (!state.weather) return;
   state.weather.daily.forEach(d => {
     const el = document.createElement('div');
-    el.className = 'rounded-md bg-gray-50 dark:bg-gray-700 p-3 text-center';
-    el.innerHTML = `
+    el.className = 'relative overflow-hidden rounded-md bg-gray-50 dark:bg-gray-700 p-3 text-center';
+    // Use condition SVG as a full-cover, faint background layer
+    const bgUrl = getWeatherIconPath(d.weatherCode);
+    const bg = document.createElement('div');
+    bg.setAttribute('aria-hidden', 'true');
+    bg.className = 'absolute pointer-events-none';
+    bg.style.top = '0';
+    bg.style.right = '0';
+    bg.style.width = '50%';
+    bg.style.height = '50%';
+    bg.style.backgroundImage = `url('${bgUrl}')`;
+    bg.style.backgroundRepeat = 'no-repeat';
+    bg.style.backgroundPosition = 'top right';
+    bg.style.backgroundSize = 'contain';
+    bg.style.opacity = '0.55';
+    bg.style.zIndex = '0';
+    el.appendChild(bg);
+
+    const content = document.createElement('div');
+    content.style.position = 'relative';
+    content.style.zIndex = '1';
+    content.innerHTML = `
       <div class="text-sm font-medium">${formatDay(d.date)}</div>
-      <div class="flex justify-center mb-1">${createWeatherIconImg(d.weatherCode, 'w-6 h-6')}</div>
-      <div class="text-xs text-gray-500 dark:text-gray-300">${d.weatherText}</div>
+      <div class="text-xs text-gray-500 dark:text-gray-300 mb-1">${d.weatherText}</div>
       <div class="text-lg font-semibold">${formatTemp(d.temperatureMax)} / ${formatTemp(d.temperatureMin)}</div>
       <div class="text-xs">💧 ${Math.round(d.precipitationProbabilityMax ?? 0)}% · 💨 ${Math.round((d.windSpeedMax ?? 0))} km/h</div>
     `;
+    el.appendChild(content);
     dailyContainer.appendChild(el);
   });
 }
