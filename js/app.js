@@ -1,290 +1,548 @@
 /*
   Weather 4 Bike – Application Orchestrator (UI Controller)
 
-  Goal: Tie together location lookup, weather fetching, and riding insights to render
-  an interactive, accessible UI. This module owns app state, binds UI events, and
-  renders all top-level views (current, insights, hourly, daily, charts).
+  Goal: Tie together location lookup, weather fetching, and riding insights into
+  an interactive, accessible UI.
 
-  Why: Centralizing UI logic and state makes it easier to understand the flow from
-  user actions (pick a city, toggle activity/units) to data fetching and rendering.
+  Why: Centralising UI state and rendering keeps the flow from user action to
+  data fetch to pixels easy to follow, and keeps the domain rules in insights.js
+  free of DOM concerns.
 
   How:
-  - Keep a small `state` object for activity, selected location, loaded weather, units.
-  - On load, restore preferences and either use last/geo location, then fetch weather.
-  - Render discrete sections with pure render functions; re-render on state changes.
-  - Defer domain calculations (scores/alerts) to `insights.js` and data access to
-    `weather.js` and `location.js`.
+  - A small `state` object; every state change re-renders through `renderAll`.
+  - Pure-ish render functions per section, all reading from `state`.
+  - All display formatting delegated to units.js, all judgement to insights.js.
+
+  Note on Tailwind class names: colour classes are written as complete literal
+  strings in the lookup tables below. Tailwind's scanner cannot see a class name
+  that was assembled by string concatenation, so it would purge them.
 */
 
-import { fetchWeatherData } from './weather.js';
-import { getCurrentLocation, searchCities, saveRecentLocation, getRecentLocations, clearRecentLocations, reverseGeocode, setLastLocation, getLastLocation } from './location.js';
-import { calculateRoadCyclingScore, calculateGravelConditions, calculateMTBTrailReadiness, generateSafetyAlerts, applyEnvironmentalPenalties, calculateBikeScoreFromWeather, calculateGravelScoreFromWeather, calculateMTBScoreFromWeather } from './insights.js';
+import { fetchWeatherData, fetchAirQuality, getDaylightRanges, clearWeatherCache, aqiCategory } from './weather.js';
+import {
+  getCurrentLocation, searchCities, saveRecentLocation, getRecentLocations,
+  clearRecentLocations, reverseGeocode, setLastLocation, getLastLocation
+} from './location.js';
+import {
+  DISCIPLINES, scoreCurrent, scoreHourlySeries, findBestWindow, findRainTiming,
+  generateSafetyAlerts, generateRecommendations, scoreTier
+} from './insights.js';
+import {
+  formatTemp, formatSpeed, formatVisibility, formatPercent, formatPrecip,
+  degToCardinal, temperatureComfort, windDescriptor, convertTemp, systemFor
+} from './units.js';
 
 const state = {
-  activity: 'road', // 'road' | 'gravel' | 'mtb'
-  location: null,   // { name, latitude, longitude, region, country }
+  activity: 'road',       // 'road' | 'gravel' | 'mtb'
+  location: null,
   weather: null,
-  units: 'C' // 'C' | 'F'
+  airQuality: null,
+  unitSystem: 'metric',   // 'metric' | 'imperial'
+  loading: false,
+  error: null
 };
 
-// Persisted preferences
 const UNITS_KEY = 'w4b:units';
+const ACTIVITY_KEY = 'w4b:activity';
 
-function loadUnitsFromStorage() {
-  try {
-    const v = localStorage.getItem(UNITS_KEY);
-    return v === 'C' || v === 'F' ? v : null;
-  } catch (e) {
-    return null;
+// --- Colour tables. Full literal class strings so Tailwind keeps them. ------
+
+const TONE = {
+  green: {
+    badge: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-200',
+    bar: 'bg-green-400',
+    border: 'border-green-300 dark:border-green-800',
+    soft: 'bg-green-50 dark:bg-green-900/20'
+  },
+  yellow: {
+    badge: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-200',
+    bar: 'bg-yellow-400',
+    border: 'border-yellow-300 dark:border-yellow-800',
+    soft: 'bg-yellow-50 dark:bg-yellow-900/20'
+  },
+  orange: {
+    badge: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-200',
+    bar: 'bg-orange-400',
+    border: 'border-orange-300 dark:border-orange-800',
+    soft: 'bg-orange-50 dark:bg-orange-900/20'
+  },
+  red: {
+    badge: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200',
+    bar: 'bg-red-400',
+    border: 'border-red-300 dark:border-red-800',
+    soft: 'bg-red-50 dark:bg-red-900/20'
+  },
+  gray: {
+    badge: 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200',
+    bar: 'bg-gray-400',
+    border: 'border-gray-300 dark:border-gray-700',
+    soft: 'bg-gray-50 dark:bg-gray-800'
   }
+};
+
+const ACTIVITY_CARD_BG = {
+  road: 'bg-gradient-to-r from-blue-50 to-blue-100 dark:from-gray-800 dark:to-gray-700',
+  gravel: 'bg-gradient-to-r from-orange-50 to-orange-100 dark:from-gray-800 dark:to-gray-700',
+  mtb: 'bg-gradient-to-r from-emerald-50 to-green-100 dark:from-gray-800 dark:to-gray-700'
+};
+
+const ACTIVITY_TAB_ACTIVE = {
+  road: 'bg-blue-600 text-white',
+  gravel: 'bg-orange-600 text-white',
+  mtb: 'bg-green-600 text-white'
+};
+const TAB_INACTIVE = 'bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700';
+
+const ACTIVITY_EMOJI = { road: '🚴🏼‍♂️', gravel: '🚴🏼', mtb: '🚵🏼‍♀️' };
+
+function tone(key) {
+  return TONE[key] || TONE.gray;
 }
 
-function saveUnitsToStorage(units) {
-  try {
-    localStorage.setItem(UNITS_KEY, units);
-  } catch (e) {
-    // ignore storage errors (private mode, etc.)
-  }
+// --- Element handles --------------------------------------------------------
+
+const el = {};
+function cacheElements() {
+  const ids = [
+    'location-indicator', 'app-title', 'city-search', 'search-results', 'use-geolocation',
+    'refresh-btn', 'recents-toggle', 'recents-list', 'current-conditions', 'current-summary',
+    'current-updated', 'insights', 'insights-card', 'hourly-forecast', 'daily-forecast',
+    'best-window', 'toast', 'error-banner', 'error-detail', 'error-retry',
+    'mobile-menu-btn', 'header-controls', 'help-button', 'help-modal', 'help-overlay',
+    'help-close', 'help-close-2', 'units-c', 'units-f', 'scenic-section', 'scenic-image',
+    'scenic-credit', 'daily-temp-chart'
+  ];
+  ids.forEach(id => { el[camel(id)] = document.getElementById(id); });
+  el.activityButtons = ['activity-road', 'activity-gravel', 'activity-mtb']
+    .map(id => document.getElementById(id))
+    .filter(Boolean);
 }
 
-// Elements
-const locationIndicator = document.getElementById('location-indicator');
-const appTitle = document.getElementById('app-title');
-const citySearchInput = document.getElementById('city-search');
-const searchResults = document.getElementById('search-results');
-const useGeoButton = document.getElementById('use-geolocation');
-const recentsToggle = document.getElementById('recents-toggle');
-const recentsList = document.getElementById('recents-list');
-const activityButtons = [
-  document.getElementById('activity-road'),
-  document.getElementById('activity-gravel'),
-  document.getElementById('activity-mtb')
-];
+function camel(id) {
+  return id.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+}
 
-const currentContainer = document.getElementById('current-conditions');
-const currentSummary = document.getElementById('current-summary');
-const weatherBgIcon = document.getElementById('weather-bg-icon');
-const insightsContainer = document.getElementById('insights');
-const hourlyContainer = document.getElementById('hourly-forecast');
-const dailyContainer = document.getElementById('daily-forecast');
-const toast = document.getElementById('toast');
 let dailyTempChart = null;
+let searchActiveIndex = -1;
+let searchOptions = [];
+let lastFocusedBeforeModal = null;
 
-// Init
-/**
- * Goal: Bootstrap the app when the DOM is ready.
- * Why: We must bind events and load initial data only after the UI is available.
- * How: Restore units, wire UI, resolve last/geo location, fetch weather, then render.
- */
+// ---------------------------------------------------------------------------
+// Bootstrap
+// ---------------------------------------------------------------------------
+
 document.addEventListener('DOMContentLoaded', async () => {
-  // Load persisted units before wiring UI so initial render reflects preference
-  const savedUnits = loadUnitsFromStorage();
-  if (savedUnits) state.units = savedUnits;
+  cacheElements();
+  loadPreferences();
   bindUI();
-  initScenicImageFallback();
+  updateUnitsToggleUI();
+  updateActivityTabsUI();
+  registerServiceWorker();
+  initScenicImage();
+  renderSkeletons();
+
   try {
-    // Try last location first
     const last = getLastLocation();
     if (last) {
       await loadWeather(last);
     } else {
       setLocationIndicator('Locating…');
       const { latitude, longitude, accuracy } = await getCurrentLocation();
-      const rev = await safeReverse(latitude, longitude);
-      await loadWeather(rev || { name: 'Current location', latitude, longitude, region: '', country: '', accuracy });
+      const place = await safeReverse(latitude, longitude);
+      await loadWeather(place || { name: 'Current location', latitude, longitude, region: '', country: '', accuracy });
     }
-  } catch (e) {
+  } catch {
     setLocationIndicator('Using default location');
-    // Default demo location if geolocation is unavailable
     await loadWeather({ name: 'San Francisco', latitude: 37.7749, longitude: -122.4194, region: 'CA', country: 'USA' });
   }
   renderRecentsDropdown();
 });
 
-/**
- * Goal: Register all event handlers and interactive behaviors.
- * Why: Keeps wiring concerns in one place so the render functions stay focused.
- * How: Attach click/input listeners for activity, search, recents, units, and modals.
- */
-function bindUI() {
-  activityButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      state.activity = btn.dataset.activity;
-      activityButtons.forEach(b => b.setAttribute('aria-selected', String(b === btn)));
-      renderInsights();
-    });
-  });
+function loadPreferences() {
+  try {
+    const stored = localStorage.getItem(UNITS_KEY);
+    // Migrate the old 'C' / 'F' values, which only ever governed temperature.
+    if (stored === 'metric' || stored === 'imperial') state.unitSystem = stored;
+    else if (stored === 'F') state.unitSystem = 'imperial';
+    else if (stored === 'C') state.unitSystem = 'metric';
 
-  useGeoButton.addEventListener('click', async () => {
+    const activity = localStorage.getItem(ACTIVITY_KEY);
+    if (activity && DISCIPLINES[activity]) state.activity = activity;
+  } catch {
+    // Private mode — defaults are fine.
+  }
+}
+
+function savePreference(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* ignore */ }
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* offline support is optional */ });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Event wiring
+// ---------------------------------------------------------------------------
+
+function bindUI() {
+  bindActivityTabs();
+  bindSearch();
+  bindRecents();
+  bindUnits();
+  bindHelpModal();
+
+  el.useGeolocation?.addEventListener('click', async () => {
     try {
       setLocationIndicator('Locating…');
       const { latitude, longitude, accuracy } = await getCurrentLocation();
-      const rev = await safeReverse(latitude, longitude);
-      await loadWeather(rev || { name: 'Current location', latitude, longitude, region: '', country: '', accuracy });
-    } catch (e) {
+      const place = await safeReverse(latitude, longitude);
+      await loadWeather(place || { name: 'Current location', latitude, longitude, region: '', country: '', accuracy });
+    } catch {
       showToast('Could not access location. Please enable permissions.');
     }
   });
 
-  const debounced = debounce(onSearchChanged, 300);
-  citySearchInput.addEventListener('input', debounced);
-  citySearchInput.addEventListener('focus', () => {
-    if (searchResults.children.length > 0) searchResults.classList.remove('hidden');
+  el.refreshBtn?.addEventListener('click', async () => {
+    if (!state.location) return;
+    clearWeatherCache();
+    await loadWeather(state.location, { force: true });
+    showToast('Forecast refreshed', 1500);
   });
+
+  el.errorRetry?.addEventListener('click', async () => {
+    if (state.location) await loadWeather(state.location, { force: true });
+  });
+
+  el.mobileMenuBtn?.addEventListener('click', () => {
+    if (!el.headerControls) return;
+    const willShow = el.headerControls.classList.contains('hidden');
+    el.headerControls.classList.toggle('hidden', !willShow);
+    el.mobileMenuBtn.setAttribute('aria-expanded', String(willShow));
+  });
+
   document.addEventListener('click', (e) => {
-    if (!searchResults.contains(e.target) && e.target !== citySearchInput) {
-      searchResults.classList.add('hidden');
+    if (el.searchResults && !el.searchResults.contains(e.target) && e.target !== el.citySearch) {
+      closeSearchResults();
     }
-    if (!recentsList.contains(e.target) && e.target !== recentsToggle) {
-      recentsList.classList.add('hidden');
+    if (el.recentsList && !el.recentsList.contains(e.target) && e.target !== el.recentsToggle) {
+      el.recentsList.classList.add('hidden');
+      el.recentsToggle?.setAttribute('aria-expanded', 'false');
     }
   });
+}
 
-  recentsToggle.addEventListener('click', () => {
-    renderRecentsDropdown();
-    recentsList.classList.toggle('hidden');
-  });
-
-  // Mobile menu toggle
-  const mobileBtn = document.getElementById('mobile-menu-btn');
-  const headerControls = document.getElementById('header-controls');
-  mobileBtn?.addEventListener('click', () => {
-    if (!headerControls) return;
-    const isHidden = headerControls.classList.contains('hidden');
-    headerControls.classList.toggle('hidden');
-    mobileBtn.setAttribute('aria-expanded', String(isHidden));
-  });
-
-  // Help modal
-  const helpBtn = document.getElementById('help-button');
-  const helpModal = document.getElementById('help-modal');
-  const helpOverlay = document.getElementById('help-overlay');
-  const helpClose = document.getElementById('help-close');
-  const helpClose2 = document.getElementById('help-close-2');
-  const openHelp = () => { if (helpModal) { helpModal.classList.remove('hidden'); helpBtn?.setAttribute('aria-expanded', 'true'); } };
-  const closeHelp = () => { if (helpModal) { helpModal.classList.add('hidden'); helpBtn?.setAttribute('aria-expanded', 'false'); } };
-  helpBtn?.addEventListener('click', openHelp);
-  helpOverlay?.addEventListener('click', closeHelp);
-  helpClose?.addEventListener('click', closeHelp);
-  helpClose2?.addEventListener('click', closeHelp);
-
-  // Units toggle
-  const cBtn = document.getElementById('units-c');
-  const fBtn = document.getElementById('units-f');
-  if (cBtn && fBtn) {
-    cBtn.addEventListener('click', () => {
-      state.units = 'C';
-      saveUnitsToStorage('C');
-      updateUnitsToggleUI();
-      renderAll();
+/** Tabs follow the WAI-ARIA roving-tabindex pattern: arrows move, Home/End jump. */
+function bindActivityTabs() {
+  el.activityButtons.forEach((btn, index) => {
+    btn.addEventListener('click', () => selectActivity(btn.dataset.activity));
+    btn.addEventListener('keydown', (e) => {
+      let target = null;
+      if (e.key === 'ArrowRight') target = el.activityButtons[(index + 1) % el.activityButtons.length];
+      else if (e.key === 'ArrowLeft') target = el.activityButtons[(index - 1 + el.activityButtons.length) % el.activityButtons.length];
+      else if (e.key === 'Home') target = el.activityButtons[0];
+      else if (e.key === 'End') target = el.activityButtons[el.activityButtons.length - 1];
+      if (!target) return;
+      e.preventDefault();
+      selectActivity(target.dataset.activity);
+      target.focus();
     });
-    fBtn.addEventListener('click', () => {
-      state.units = 'F';
-      saveUnitsToStorage('F');
-      updateUnitsToggleUI();
-      renderAll();
-    });
-    // Initialize visual state
+  });
+}
+
+function selectActivity(activity) {
+  if (!DISCIPLINES[activity] || state.activity === activity) return;
+  state.activity = activity;
+  savePreference(ACTIVITY_KEY, activity);
+  updateActivityTabsUI();
+  renderInsights();
+  renderBestWindow();
+  renderHourly();
+}
+
+function updateActivityTabsUI() {
+  el.activityButtons.forEach(btn => {
+    const active = btn.dataset.activity === state.activity;
+    const activeClass = ACTIVITY_TAB_ACTIVE[btn.dataset.activity] || ACTIVITY_TAB_ACTIVE.road;
+    btn.className = `px-4 py-2 font-medium focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 transition-colors ${active ? activeClass : TAB_INACTIVE}`;
+    btn.setAttribute('aria-selected', String(active));
+    btn.tabIndex = active ? 0 : -1;
+  });
+}
+
+function bindUnits() {
+  const set = (system) => {
+    if (state.unitSystem === system) return;
+    state.unitSystem = system;
+    savePreference(UNITS_KEY, system);
     updateUnitsToggleUI();
-  }
+    renderAll();
+  };
+  el.unitsC?.addEventListener('click', () => set('metric'));
+  el.unitsF?.addEventListener('click', () => set('imperial'));
 }
 
-// Visually highlight the active units toggle
-/**
- * Goal: Reflect the active units selection in the UI.
- * Why: Visual feedback helps users understand which measurement system is active.
- * How: Toggle classes/ARIA on the °C/°F buttons based on current `state.units`.
- */
 function updateUnitsToggleUI() {
-  const cBtn = document.getElementById('units-c');
-  const fBtn = document.getElementById('units-f');
-  if (!cBtn || !fBtn) return;
-  const baseBtn = 'px-3 py-2 text-sm transition-colors';
-  const active = 'bg-blue-600 text-white dark:bg-blue-500 font-semibold';
-  const inactive = 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700';
+  if (!el.unitsC || !el.unitsF) return;
+  const base = 'px-3 py-2 text-sm transition-colors';
+  const active = 'bg-blue-600 text-white font-semibold';
+  const inactive = 'bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700';
+  const metric = state.unitSystem === 'metric';
+  el.unitsC.className = `${base} ${metric ? active : inactive}`;
+  el.unitsF.className = `${base} ${metric ? inactive : active}`;
+  el.unitsC.setAttribute('aria-pressed', String(metric));
+  el.unitsF.setAttribute('aria-pressed', String(!metric));
+}
 
-  if (state.units === 'C') {
-    cBtn.className = `${baseBtn} ${active}`;
-    fBtn.className = `${baseBtn} ${inactive}`;
-    cBtn.setAttribute('aria-pressed', 'true');
-    fBtn.setAttribute('aria-pressed', 'false');
-  } else {
-    cBtn.className = `${baseBtn} ${inactive}`;
-    fBtn.className = `${baseBtn} ${active}`;
-    cBtn.setAttribute('aria-pressed', 'false');
-    fBtn.setAttribute('aria-pressed', 'true');
-  }
+// --- Search combobox --------------------------------------------------------
+
+function bindSearch() {
+  if (!el.citySearch) return;
+  el.citySearch.addEventListener('input', debounce(onSearchChanged, 300));
+  el.citySearch.addEventListener('focus', () => {
+    if (searchOptions.length) openSearchResults();
+  });
+  el.citySearch.addEventListener('keydown', onSearchKeydown);
 }
 
 /**
- * Goal: Handle debounced city search input.
- * Why: Avoid spamming the geocoding API on every keystroke; show useful results.
- * How: When >=3 chars, query `searchCities` and render a dropdown of candidates.
+ * Goal: Full keyboard operation of the city picker.
+ * Why: Previously the results were plain divs with click handlers only — a
+ *      keyboard or screen-reader user could type a city but never choose one.
  */
+function onSearchKeydown(e) {
+  const open = el.searchResults && !el.searchResults.classList.contains('hidden');
+  switch (e.key) {
+    case 'ArrowDown':
+      e.preventDefault();
+      if (!open && searchOptions.length) openSearchResults();
+      moveSearchActive(1);
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      moveSearchActive(-1);
+      break;
+    case 'Enter':
+      if (open && searchActiveIndex >= 0 && searchOptions[searchActiveIndex]) {
+        e.preventDefault();
+        chooseCity(searchOptions[searchActiveIndex]);
+      }
+      break;
+    case 'Escape':
+      closeSearchResults();
+      break;
+    case 'Tab':
+      closeSearchResults();
+      break;
+    default:
+      break;
+  }
+}
+
+function moveSearchActive(delta) {
+  if (!searchOptions.length) return;
+  searchActiveIndex = (searchActiveIndex + delta + searchOptions.length) % searchOptions.length;
+  const items = el.searchResults.querySelectorAll('[role="option"]');
+  items.forEach((item, i) => {
+    const active = i === searchActiveIndex;
+    item.setAttribute('aria-selected', String(active));
+    item.classList.toggle('bg-gray-100', active);
+    item.classList.toggle('dark:bg-gray-700', active);
+    if (active) {
+      el.citySearch.setAttribute('aria-activedescendant', item.id);
+      item.scrollIntoView({ block: 'nearest' });
+    }
+  });
+}
+
+function openSearchResults() {
+  el.searchResults.classList.remove('hidden');
+  el.citySearch.setAttribute('aria-expanded', 'true');
+}
+
+function closeSearchResults() {
+  el.searchResults?.classList.add('hidden');
+  el.citySearch?.setAttribute('aria-expanded', 'false');
+  el.citySearch?.removeAttribute('aria-activedescendant');
+  searchActiveIndex = -1;
+}
+
 async function onSearchChanged() {
-  const q = citySearchInput.value.trim();
+  const q = el.citySearch.value.trim();
   if (q.length < 3) {
-    searchResults.classList.add('hidden');
-    searchResults.innerHTML = '';
+    searchOptions = [];
+    closeSearchResults();
+    el.searchResults.innerHTML = '';
     return;
   }
   try {
-    const cities = await searchCities(q);
-    renderSearchResults(cities);
-  } catch (e) {
-    // swallow errors
+    searchOptions = await searchCities(q);
+    renderSearchResults(searchOptions);
+  } catch {
+    searchOptions = [];
+    closeSearchResults();
   }
 }
 
-/**
- * Goal: Present geocoding results for quick selection.
- * Why: Lets users switch locations without leaving the page.
- * How: Build a list of buttons; on click, load weather for the chosen city.
- */
 function renderSearchResults(cities) {
-  searchResults.innerHTML = '';
+  el.searchResults.innerHTML = '';
+  searchActiveIndex = -1;
   if (!cities.length) {
-    searchResults.classList.add('hidden');
+    closeSearchResults();
     return;
   }
-  cities.forEach(city => {
-    const btn = document.createElement('button');
-    btn.className = 'w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700';
-    btn.innerHTML = `
+  cities.forEach((city, i) => {
+    const li = document.createElement('li');
+    li.id = `city-option-${i}`;
+    li.setAttribute('role', 'option');
+    li.setAttribute('aria-selected', 'false');
+    li.className = 'cursor-pointer px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700';
+    li.innerHTML = `
       <div class="font-medium">${escapeHtml(city.name)}</div>
-      <div class="text-sm text-gray-500 dark:text-gray-400">${escapeHtml(city.region || '')}${city.region && city.country ? ', ' : ''}${escapeHtml(city.country || '')} · ${city.latitude.toFixed(2)}, ${city.longitude.toFixed(2)}</div>
+      <div class="text-sm text-gray-500 dark:text-gray-400">${escapeHtml(locationSubtitle(city))}</div>
+    `;
+    li.addEventListener('click', () => chooseCity(city));
+    el.searchResults.appendChild(li);
+  });
+  openSearchResults();
+}
+
+async function chooseCity(city) {
+  closeSearchResults();
+  el.citySearch.value = city.name;
+  await loadWeather(city);
+}
+
+function locationSubtitle(loc) {
+  const parts = [loc.region, loc.country].filter(Boolean);
+  const coords = `${Number(loc.latitude).toFixed(2)}, ${Number(loc.longitude).toFixed(2)}`;
+  return parts.length ? `${parts.join(', ')} · ${coords}` : coords;
+}
+
+// --- Recents ----------------------------------------------------------------
+
+function bindRecents() {
+  el.recentsToggle?.addEventListener('click', () => {
+    renderRecentsDropdown();
+    const willShow = el.recentsList.classList.contains('hidden');
+    el.recentsList.classList.toggle('hidden', !willShow);
+    el.recentsToggle.setAttribute('aria-expanded', String(willShow));
+  });
+}
+
+function renderRecentsDropdown() {
+  if (!el.recentsList) return;
+  const recents = getRecentLocations();
+  el.recentsList.innerHTML = '';
+
+  if (!recents.length) {
+    const empty = document.createElement('div');
+    empty.className = 'px-3 py-2 text-sm text-gray-500 dark:text-gray-400';
+    empty.textContent = 'No recent locations';
+    el.recentsList.appendChild(empty);
+    return;
+  }
+
+  const header = document.createElement('div');
+  header.className = 'flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700';
+  header.innerHTML = '<div class="text-sm font-medium">Recent</div>';
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'text-xs text-red-600 hover:underline';
+  clearBtn.textContent = 'Clear';
+  clearBtn.addEventListener('click', () => { clearRecentLocations(); renderRecentsDropdown(); });
+  header.appendChild(clearBtn);
+  el.recentsList.appendChild(header);
+
+  recents.forEach(r => {
+    const btn = document.createElement('button');
+    btn.className = 'w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700';
+    btn.innerHTML = `
+      <div class="font-medium">${escapeHtml(r.name)}</div>
+      <div class="text-sm text-gray-500 dark:text-gray-400">${escapeHtml(locationSubtitle(r))}</div>
     `;
     btn.addEventListener('click', async () => {
-      searchResults.classList.add('hidden');
-      citySearchInput.value = `${city.name}`;
-      await loadWeather(city);
+      el.recentsList.classList.add('hidden');
+      el.recentsToggle?.setAttribute('aria-expanded', 'false');
+      await loadWeather(r);
     });
-    searchResults.appendChild(btn);
+    el.recentsList.appendChild(btn);
   });
-  searchResults.classList.remove('hidden');
 }
 
+// --- Help modal, with a focus trap -----------------------------------------
+
+function bindHelpModal() {
+  const open = () => {
+    if (!el.helpModal) return;
+    lastFocusedBeforeModal = document.activeElement;
+    el.helpModal.classList.remove('hidden');
+    el.helpButton?.setAttribute('aria-expanded', 'true');
+    el.helpClose?.focus();
+    document.addEventListener('keydown', onModalKeydown);
+  };
+  const close = () => {
+    if (!el.helpModal) return;
+    el.helpModal.classList.add('hidden');
+    el.helpButton?.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('keydown', onModalKeydown);
+    if (lastFocusedBeforeModal instanceof HTMLElement) lastFocusedBeforeModal.focus();
+  };
+
+  function onModalKeydown(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    // Trap focus inside the dialog while it is open.
+    const focusables = el.helpModal.querySelectorAll(
+      'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])'
+    );
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  el.helpButton?.addEventListener('click', open);
+  el.helpOverlay?.addEventListener('click', close);
+  el.helpClose?.addEventListener('click', close);
+  el.helpClose2?.addEventListener('click', close);
+}
+
+// ---------------------------------------------------------------------------
+// Data loading
+// ---------------------------------------------------------------------------
+
 /**
- * Goal: Fetch weather for a location and update all UI.
- * Why: Central data-loading entry point reused by search, recents, and geolocation.
- * How: Save selection (recents/last), fetch via `fetchWeatherData`, then `renderAll`.
+ * Goal: Fetch weather (and air quality) for a location and refresh every view.
+ * Why: Single entry point shared by search, recents, geolocation and refresh.
+ * How: Show skeletons, fetch, persist the choice, render. On failure show an
+ *      inline error with a retry action rather than leaving a blank page.
  */
-async function loadWeather(location) {
+async function loadWeather(location, options = {}) {
   state.location = location;
-  setLocationIndicator(`${location.name}${location.region ? ', ' + location.region : ''}${location.country ? ', ' + location.country : ''}`);
-  setTitleLocation(`${location.name}${location.region ? ', ' + location.region : ''}${location.country ? ', ' + location.country : ''}`);
+  state.loading = true;
+  state.error = null;
+  hideErrorBanner();
+  setLocationIndicator(formatLocationName(location));
+  renderSkeletons();
+
   try {
-    showToast('Loading weather…');
-    console.groupCollapsed('[app] loadWeather');
-    console.info('[app] location', location);
-    const weather = await fetchWeatherData(location.latitude, location.longitude);
+    const weather = await fetchWeatherData(location.latitude, location.longitude, options);
     state.weather = weather;
-    console.info('[app] weather loaded', {
-      hourly: weather.hourly?.length,
-      daily: weather.daily?.length,
-      nearestIndex: weather.nearestIndex,
-      next24Len: weather.next24FromNearest?.length
-    });
+
     saveRecentLocation({
       id: `${location.latitude},${location.longitude}`,
       name: location.name,
@@ -295,406 +553,417 @@ async function loadWeather(location) {
       timestamp: Date.now()
     });
     setLastLocation(location);
+
+    state.loading = false;
     renderAll();
-    hideToast();
-    console.groupEnd();
+
+    // Air quality is a bonus: fetch after the main render so it never delays it.
+    fetchAirQuality(location.latitude, location.longitude, options).then(air => {
+      if (state.location !== location) return; // user moved on
+      state.airQuality = air;
+      if (state.weather) state.weather.airQuality = air;
+      renderCurrent();
+      renderInsights();
+    });
   } catch (e) {
-    hideToast();
-    console.error('[app] loadWeather failed', e);
-    showToast('Failed to load weather. Please try again.');
+    state.loading = false;
+    state.error = e;
+    showErrorBanner(e);
   }
 }
 
-/**
- * Goal: Re-render all UI sections based on current `state`.
- * Why: Ensures derived UIs stay consistent after any state change.
- * How: Delegate to section renderers; also refresh chart and recents.
- */
+function showErrorBanner(error) {
+  if (!el.errorBanner) return;
+  el.errorBanner.classList.remove('hidden');
+  if (el.errorDetail) {
+    el.errorDetail.textContent = navigator.onLine === false
+      ? 'You appear to be offline. Reconnect and try again.'
+      : `${error?.message || 'Unknown error'}`;
+  }
+  clearSkeletons();
+}
+
+function hideErrorBanner() {
+  el.errorBanner?.classList.add('hidden');
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
 function renderAll() {
   renderCurrent();
+  renderBestWindow();
   renderInsights();
   renderHourly();
   renderDaily();
   renderDailyTempChart();
   renderRecentsDropdown();
+  wireIconFallbacks(document.body);
 }
 
+function skeletonBlock(classes) {
+  return `<div class="animate-pulse rounded-md bg-gray-200 dark:bg-gray-700 ${classes}"></div>`;
+}
+
+/** Show shaped placeholders instead of an empty page while the forecast loads. */
+function renderSkeletons() {
+  if (el.currentSummary) el.currentSummary.innerHTML = skeletonBlock('h-14 w-56 mb-2') + skeletonBlock('h-4 w-72');
+  if (el.currentConditions) {
+    el.currentConditions.innerHTML = Array.from({ length: 8 })
+      .map(() => skeletonBlock('h-[68px]')).join('');
+  }
+  if (el.bestWindow) el.bestWindow.innerHTML = skeletonBlock('h-20');
+  if (el.insights) el.insights.innerHTML = skeletonBlock('h-40');
+  if (el.hourlyForecast) {
+    el.hourlyForecast.innerHTML = Array.from({ length: 8 })
+      .map(() => skeletonBlock('min-w-[92px] h-[132px]')).join('');
+  }
+  if (el.dailyForecast) {
+    el.dailyForecast.innerHTML = Array.from({ length: 7 })
+      .map(() => skeletonBlock('h-[104px]')).join('');
+  }
+}
+
+function clearSkeletons() {
+  [el.currentSummary, el.currentConditions, el.bestWindow, el.insights, el.hourlyForecast, el.dailyForecast]
+    .forEach(node => { if (node && node.querySelector('.animate-pulse')) node.innerHTML = ''; });
+}
+
+// --- Current conditions -----------------------------------------------------
+
+function renderCurrent() {
+  const c = state.weather?.current;
+  if (!c || !el.currentConditions) return;
+  const sys = state.unitSystem;
+
+  const feelsDiffers = c.apparentTemperature != null && c.temperature != null
+    && Math.abs(Number(c.apparentTemperature) - Number(c.temperature)) >= 1;
+
+  el.currentSummary.innerHTML = `
+    <div class="flex items-end gap-3 flex-wrap">
+      <div class="text-5xl font-bold">${formatTemp(c.temperature, sys)}</div>
+      <div class="text-lg text-gray-600 dark:text-gray-300">${escapeHtml(c.weatherText || '')}</div>
+    </div>
+    <div class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+      ${feelsDiffers ? `Feels like ${formatTemp(c.apparentTemperature, sys)} · ` : ''}Wind ${formatSpeed(c.windSpeed, sys)} ${degToCardinal(c.windDirection)}${sunLine()}
+    </div>
+  `;
+
+  if (el.currentUpdated) {
+    el.currentUpdated.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  }
+
+  const gustText = c.windGusts != null ? ` (gusts ${formatSpeed(c.windGusts, sys)})` : '';
+  const air = state.airQuality;
+
+  const items = [
+    { label: 'Temp', value: formatTemp(c.temperature, sys), icon: 'temp', title: 'Air temperature' },
+    { label: 'Feels like', value: formatTemp(c.apparentTemperature ?? c.temperature, sys), icon: 'thermo', title: 'Apparent temperature, accounting for wind and humidity' },
+    { label: 'Wind', value: `${formatSpeed(c.windSpeed, sys)}${gustText}`, icon: 'wind', title: 'Wind speed at 10 m, with gusts' },
+    { label: 'UV', value: c.uvIndex == null ? '—' : String(Math.round(c.uvIndex)), icon: 'uv', title: 'UV index' },
+    { label: 'Precip', value: `${formatPercent(c.precipitationProbability)}${Number(c.precipitation) > 0 ? ` · ${formatPrecip(c.precipitation, sys)}` : ''}`, icon: 'humidity', title: 'Chance of precipitation, and current rate' },
+    { label: 'Humidity', value: formatPercent(c.humidity), icon: 'humidity', title: 'Relative humidity' },
+    { label: 'Visibility', value: formatVisibility(c.visibility, sys), icon: 'visibility', title: 'Visibility' },
+    air
+      ? { label: 'Air quality', value: `${Math.round(air.aqi)} · ${air.category.label}`, icon: 'air', title: `${air.scale}${air.pm25 != null ? ` · PM2.5 ${air.pm25} µg/m³` : ''}` }
+      : { label: 'Cloud', value: formatPercent(c.cloudCover), icon: 'cloud', title: 'Cloud cover' }
+  ];
+
+  el.currentConditions.innerHTML = items.map(it => `
+    <div class="rounded-md bg-white/70 dark:bg-gray-700 p-3" title="${escapeAttr(it.title)}">
+      <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-300">${icon(it.icon)}<span>${escapeHtml(it.label)}</span></div>
+      <div class="text-lg font-semibold">${escapeHtml(it.value)}</div>
+    </div>
+  `).join('');
+}
+
+function sunLine() {
+  const today = state.weather?.today;
+  if (!today?.sunrise || !today?.sunset) return '';
+  return ` · ☀ ${formatClock(today.sunrise)} – ${formatClock(today.sunset)}`;
+}
+
+// --- Best window ------------------------------------------------------------
+
 /**
- * Goal: Load a scenic Unsplash photo as a visual fallback/header.
- * Why: Enhances aesthetics when no hero image is present.
- * How: Fetch a random landscape using an access key; hide if unavailable.
+ * Goal: Answer the question the app exists to answer — when to go out.
+ * Why: The forecast holds 168 hours; judging only "now" wastes all of it.
  */
-function initScenicImageFallback() {
-  const img = document.getElementById('scenic-image');
-  if (!img) return;
-  const credit = document.getElementById('scenic-credit');
-  // Optional: set your Unsplash Access Key here or via window.UNSPLASH_ACCESS_KEY
-  const accessKey = window.UNSPLASH_ACCESS_KEY || '2637b3c08f3ee9646350728fd410ba5cf20cf548771532b1b57b353ffcc358de';
-  const query = 'cycling,mountains,outdoors';
+function renderBestWindow() {
+  if (!el.bestWindow || !state.weather) return;
 
-  const setImage = (url, alt, authorName, authorLink) => {
-    img.src = url;
-    img.alt = alt || 'Scenic cycling photo';
-    if (credit) {
-      if (authorName && authorLink) {
-        credit.innerHTML = `Photo by <a href="${authorLink}" target="_blank" rel="noopener" class="underline">${authorName}</a> on <a href="https://unsplash.com" target="_blank" rel="noopener" class="underline">Unsplash</a>`;
-      } else {
-        credit.textContent = '';
-      }
+  const scored = scoreHourlySeries(state.weather, state.activity, { hours: 30 });
+  const daylight = getDaylightRanges(state.weather);
+  const best = findBestWindow(scored, { daylight: daylight.length ? daylight : null, withinHours: 24 });
+  const rain = findRainTiming(state.weather.hourly, { hours: 24 });
+
+  const rainLine = (() => {
+    if (!rain) return '';
+    if (rain.state === 'wet') {
+      return rain.clearsAt
+        ? `<span class="inline-flex items-center gap-1">🌧 Wet now, clearing around <strong>${formatClock(rain.clearsAt)}</strong></span>`
+        : '<span class="inline-flex items-center gap-1">🌧 Wet for the next 24 hours</span>';
     }
-  };
+    return rain.startsAt
+      ? `<span class="inline-flex items-center gap-1">🌤 Dry until <strong>${formatClock(rain.startsAt)}</strong></span>`
+      : '<span class="inline-flex items-center gap-1">🌤 Dry for the next 24 hours</span>';
+  })();
 
-  const setHidden = () => { img.style.display = 'none'; if (credit) credit.textContent = ''; };
-
-  if (!accessKey) {
-    // If no access key, hide image (or you could keep the Source endpoint here)
-    setHidden();
+  if (!best) {
+    el.bestWindow.innerHTML = `
+      <div class="rounded-lg border ${TONE.gray.border} ${TONE.gray.soft} p-4">
+        <div class="font-medium">No clear window in the next 24 hours of daylight.</div>
+        <div class="text-sm text-gray-600 dark:text-gray-300 mt-1">Check the 7-day outlook below, or plan an indoor session.</div>
+        <div class="text-sm text-gray-600 dark:text-gray-300 mt-2">${rainLine}</div>
+      </div>`;
     return;
   }
 
-  const apiUrl = `https://api.unsplash.com/photos/random?client_id=${encodeURIComponent(accessKey)}&query=${encodeURIComponent(query)}&orientation=landscape`;
-  fetch(apiUrl)
-    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-    .then(data => {
-      const imageUrl = data?.urls?.regular || data?.urls?.full || '';
-      const alt = data?.alt_description || 'Scenic cycling';
-      const authorName = data?.user?.name;
-      const authorLink = data?.user?.links?.html;
-      if (imageUrl) setImage(imageUrl, alt, authorName, authorLink);
-      else setHidden();
-    })
-    .catch(() => setHidden());
+  const t = tone(best.tier.tone);
+  const sparkline = renderSparkline(scored.slice(0, 24));
+
+  el.bestWindow.innerHTML = `
+    <div class="rounded-lg border ${t.border} ${t.soft} p-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-sm text-gray-600 dark:text-gray-300">Best ${best.hours}-hour window for ${escapeHtml(DISCIPLINES[state.activity].label)}</div>
+          <div class="text-2xl font-bold mt-0.5">${formatDayPrefix(best.start)}${formatClock(best.start)} – ${formatClock(best.end)}</div>
+          <div class="text-sm text-gray-600 dark:text-gray-300 mt-1">${rainLine}</div>
+        </div>
+        <div class="inline-flex items-center gap-2 ${t.badge} px-3 py-1.5 rounded-full font-medium">
+          ${best.tier.emoji} <span>${best.score}/10 · ${escapeHtml(best.tier.label)}</span>
+        </div>
+      </div>
+      ${sparkline}
+    </div>`;
 }
 
-/**
- * Goal: Show current conditions summary.
- * Why: Riders need at-a-glance temperature, wind, UV, and visibility right now.
- * How: Read `state.weather.current` and populate a small grid of key metrics.
- */
-function renderCurrent() {
-  const c = state.weather?.current;
-  if (!c) return;
-  currentContainer.innerHTML = '';
-  // Summary with big temp and condition
-  const mainTemp = formatTemp(c.temperature);
-  currentSummary.innerHTML = `
-    <div class="flex items-end gap-3">
-      <div class="text-5xl font-bold">${mainTemp}</div>
-      <div class="text-lg text-gray-600 dark:text-gray-300">${c.weatherText}</div>
-    </div>
-    <div class="text-sm text-gray-500 dark:text-gray-400">Wind ${Math.round(c.windSpeed ?? 0)} km/h · UV ${Math.round(c.uvIndex ?? 0)} · Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-  `;
+/** A 24-bar strip: height and colour both encode the hourly rideability score. */
+function renderSparkline(scoredHours) {
+  if (!scoredHours.length) return '';
+  const bars = scoredHours.map(h => {
+    const t = tone(h.tier.tone);
+    const height = Math.max(8, Math.round((h.score / 10) * 40));
+    return `<div class="flex-1 flex flex-col justify-end items-center gap-1" title="${escapeAttr(`${formatClock(h.date)} · ${h.score}/10 ${h.tier.label}`)}">
+      <div class="${t.bar} w-full rounded-sm" style="height:${height}px"></div>
+    </div>`;
+  }).join('');
 
-  // Background weather icon with runtime fallback and higher visibility layer
-  // Removed from Current Conditions; large icon now shown in Biking Conditions sidebar
-  if (weatherBgIcon) weatherBgIcon.innerHTML = '';
-  const items = [
-    { label: 'Temp', value: `${formatTemp(c.temperature)}`, icon: 'temp', title: 'Air temperature' },
-    { label: 'Feels', value: `${formatTemp(c.temperature)}`, icon: 'thermo', title: 'Feels like (approx)' },
-    { label: 'Wind', value: `${Math.round(c.windSpeed ?? 0)} km/h`, icon: 'wind', title: 'Wind speed at 10m' },
-    { label: 'UV', value: `${Math.round(c.uvIndex ?? 0)}`, icon: 'uv', title: 'UV index' },
-    { label: 'Precip', value: `${Math.round(c.precipitationProbability ?? 0)}%`, icon: 'humidity', title: 'Precipitation probability' },
-    { label: 'Cloud', value: `${Math.round(c.cloudCover ?? 0)}%`, icon: 'cloud', title: 'Cloud cover' },
-    { label: 'Visibility', value: `${Math.round((c.visibility ?? 0) / 1000)} km`, icon: 'visibility', title: 'Visibility' },
-    { label: 'Conditions', value: `${c.weatherText}`, icon: 'flag', title: 'Weather summary' }
-  ];
-  items.forEach(it => {
-    const div = document.createElement('div');
-    div.className = 'rounded-md bg-gray-50 dark:bg-gray-700 p-3';
-    div.innerHTML = `
-      <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-300" title="${it.title || ''}">${icon(it.icon || 'flag')}<span>${it.label}</span></div>
-      <div class="text-lg font-semibold">${it.value}</div>
-    `;
-    currentContainer.appendChild(div);
-  });
+  const first = scoredHours[0];
+  const mid = scoredHours[Math.floor(scoredHours.length / 2)];
+  const last = scoredHours[scoredHours.length - 1];
+
+  return `
+    <div class="mt-3" aria-hidden="true">
+      <div class="flex items-end gap-[2px] h-[44px]">${bars}</div>
+      <div class="flex justify-between text-[11px] text-gray-500 dark:text-gray-400 mt-1">
+        <span>${formatClock(first.date)}</span><span>${formatClock(mid.date)}</span><span>${formatClock(last.date)}</span>
+      </div>
+    </div>`;
 }
 
-/**
- * Goal: Present bike-activity insights and safety alerts.
- * Why: Translate raw weather into rideability scores and practical guidance.
- * How: Compute scores with `insights.js`, build a card with factors and tips.
- */
+// --- Insights ---------------------------------------------------------------
+
 function renderInsights() {
-  if (!state.weather) return;
-  insightsContainer.innerHTML = '';
-  // Update insights card background based on selected activity
-  const insightsCard = document.getElementById('insights-card');
-  if (insightsCard) {
-    const base = 'rounded-lg shadow-lg p-4 backdrop-blur';
-    let bg = 'bg-white/90 dark:bg-gray-800/90';
-    if (state.activity === 'road') bg = 'bg-gradient-to-r from-blue-50 to-blue-100 dark:from-gray-800 dark:to-gray-700';
-    if (state.activity === 'gravel') bg = 'bg-gradient-to-r from-orange-50 to-orange-100 dark:from-gray-800 dark:to-gray-700';
-    if (state.activity === 'mtb') bg = 'bg-gradient-to-r from-emerald-50 to-green-100 dark:from-gray-800 dark:to-gray-700';
-    insightsCard.className = `${base} ${bg}`;
-  }
-  const alerts = generateSafetyAlerts(state.weather);
-  const alertsDiv = document.createElement('div');
-  alertsDiv.className = 'space-y-2';
-  if (alerts.length) {
-    alerts.forEach(a => {
-      const color = a.severity === 'high' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-200' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-200';
-      const d = document.createElement('div');
-      d.className = `rounded-md px-3 py-2 ${color}`;
-      d.innerHTML = `<span class="mr-2">${aIcon(a.type)}</span>${a.message}`;
-      alertsDiv.appendChild(d);
-    });
-  }
-
-  const header = document.createElement('div');
-  header.className = 'flex items-center justify-between';
-  let score100 = 0; // internal 0–100 for colors/labels
-  let score10 = 0;  // displayed 1–10 score
-  let roadScoreDetail = null;
-  let gravelScoreDetail = null;
-  let mtbScoreDetail = null;
-  if (state.activity === 'road') {
-    // Use new 1–10 bike score; map to 0–100 for header
-    roadScoreDetail = calculateBikeScoreFromWeather(state.weather, 'crosswind');
-    const { score: s10 } = roadScoreDetail;
-    score10 = s10;
-    score100 = Math.round(s10 * 10);
-  }
-  if (state.activity === 'gravel') {
-    gravelScoreDetail = calculateGravelScoreFromWeather(state.weather);
-    score10 = gravelScoreDetail.score;
-    score100 = Math.round(gravelScoreDetail.score * 10);
-  }
-  if (state.activity === 'mtb') {
-    mtbScoreDetail = calculateMTBScoreFromWeather(state.weather);
-    score10 = mtbScoreDetail.score;
-    score100 = Math.round(mtbScoreDetail.score * 10);
-  }
-  // Remove extra global penalties to avoid double-counting with new algo
-  // Ensure score stays within 0-100 before any downstream usage
-  score100 = clamp(score100, 0, 100);
-  const { label, emoji, colorClass } = scoreToLabel(score100);
-  const classes = scoreColorClasses(score100);
-  const activityIcon = state.activity === 'road' ? '🚴🏼‍♂️' : (state.activity === 'gravel' ? '🚴🏼' : '🚵🏼‍♀️');
-  header.innerHTML = `
-    <div class="text-sm text-gray-500 dark:text-gray-400">Selected: <span class="mr-1">${activityIcon}</span><span class="font-medium capitalize">${state.activity}</span></div>
-    <div class="inline-flex items-center gap-2 ${classes.bg} ${classes.text} px-3 py-1 rounded-full text-sm font-medium shadow-sm">${emoji} <span>${score10}/10 – ${label}</span></div>
-  `;
-
-  insightsContainer.appendChild(header);
-  if (alerts.length) {
-    const t = document.createElement('div');
-    t.className = 'mt-2 text-sm font-medium';
-    t.textContent = 'Safety Alerts';
-    insightsContainer.appendChild(t);
-    insightsContainer.appendChild(alertsDiv);
-  }
-
-  // Biking Conditions Tile (imperial display)
+  if (!el.insights || !state.weather) return;
+  const sys = state.unitSystem;
   const c = state.weather.current;
-  const windMph = Math.round(kmhToMph(c.windSpeed ?? 0));
-  const tempDisp = formatTemp(c.temperature ?? 0);
-  const humidity = Math.round(c.humidity ?? 0);
-  const visMi = Math.round(kmToMi((c.visibility ?? 0) / 1000));
-  const windDir = degToCardinal(c.windDirection ?? 0);
-  // Convert to 1–10 scale as an integer
-  const tenInt = clamp(Math.round(score100 / 10), 1, 10);
-  const conditionText = score100 >= 80 ? 'Excellent riding conditions' : score100 >= 60 ? '~Good riding conditions' : score100 >= 40 ? 'Quite poor riding conditions' : 'Poor riding conditions';
-  const windQualifier = windMph <= 6 ? 'light winds' : windMph <= 12 ? 'mild crosswinds' : 'breezy conditions';
-  const labelEl = scoreToLabel(score100).label;
 
-  const bikeTile = document.createElement('section');
-  bikeTile.className = 'mt-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4 bg-gradient-to-r from-emerald-50 to-green-100 dark:from-gray-800 dark:to-gray-700';
-  const explain = (roadScoreDetail || gravelScoreDetail || mtbScoreDetail) ? `
+  if (el.insightsCard) {
+    el.insightsCard.className = `rounded-lg shadow-lg p-4 backdrop-blur ${ACTIVITY_CARD_BG[state.activity]}`;
+  }
+
+  const result = scoreCurrent(state.weather, state.activity);
+  const t = tone(result.tier.tone);
+  const alerts = generateSafetyAlerts(state.weather);
+  const recommendations = generateRecommendations(state.weather, state.activity);
+
+  const alertsHtml = alerts.length ? `
     <div class="mt-2">
-      <button id="bike-more-btn" class="text-sm underline">Details</button>
-      <div id="bike-explain" class="mt-2 hidden text-sm text-gray-700 dark:text-gray-200">
-        <div class="mb-1">${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).message || ''}</div>
-        <div>Score calculation (1–10): <span class="font-semibold">${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).score}</span></div>
-        <ul class="mt-1 list-disc pl-5">
-          <li>Wind penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.windPenalty ?? 0}</li>
-          <li>Temperature penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.temperaturePenalty ?? 0}</li>
-          <li>Humidity penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.humidityPenalty ?? 0}</li>
-          <li>Visibility penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.visibilityPenalty ?? 0}</li>
-          ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown?.uvPenalty != null ? `<li>UV penalty: ${(roadScoreDetail||gravelScoreDetail||mtbScoreDetail).breakdown.uvPenalty}</li>` : ''}
-        </ul>
+      <div class="text-sm font-medium mb-1">Safety Alerts</div>
+      <div class="space-y-2">
+        ${alerts.map(a => {
+          const at = a.severity === 'high' ? TONE.red : TONE.yellow;
+          return `<div class="rounded-md px-3 py-2 ${at.badge} flex items-start gap-2">
+            <span class="shrink-0 mt-0.5">${aIcon(a.type)}</span><span>${escapeHtml(a.message)}</span>
+          </div>`;
+        }).join('')}
       </div>
-    </div>
-  ` : '';
+    </div>` : '';
 
-  const bigIcon = `
-    <div class="mt-4 flex justify-center items-center">
-      <div class="relative">
-        <span class="absolute inset-0 bg-white/30 dark:bg-black/30 blur-xl rounded-full"></span>
-        <span class="relative inline-block drop-shadow-xl">
-          ${createWeatherIconImg(c.weatherCode, 'h-40 sm:h-48 md:h-56 lg:h-64 w-auto opacity-90')}
-        </span>
-      </div>
-    </div>
-  `;
-  bikeTile.innerHTML = `
-    <div class="flex flex-col sm:flex-row gap-4">
-      <div class="flex-1">
-        <div class="text-lg font-semibold mb-1">Biking Conditions</div>
-        <div class="text-sm text-gray-600 dark:text-gray-300 mb-3">${conditionText} with ${windQualifier}</div>
-        <div class="text-2xl font-bold mb-1">${tenInt}/10</div>
-        <div class="text-sm mb-3">${labelEl}</div>
-        <div class="text-sm font-medium mb-1">Key Factors</div>
-        <ul class="text-sm mb-3 space-y-1">
-          <li class="flex items-center gap-2">${icon('wind')}<span>Wind: ${windMph}mph ${windDir}</span></li>
-          <li class="flex items-center gap-2">${icon('temp')}<span>Temperature: ${tempDisp}</span></li>
-          <li class="flex items-center gap-2">${icon('humidity')}<span>Humidity: ${humidity}%</span></li>
-          <li class="flex items-center gap-2">${icon('visibility')}<span>Visibility: ${visMi}mi</span></li>
-        </ul>
-        <div class="text-sm font-medium mb-1">Recommendations</div>
-        <ul class="text-sm space-y-1">
-          <li class="flex items-center gap-2">${icon('flag')}<span>${windMph <= 6 ? 'Light wind conditions' : 'Manage crosswinds on exposed sections'}</span></li>
-          <li class="flex items-center gap-2">${icon('thermo')}<span>${(state.units === 'F' ? (Number(c.temperature) >= 55 && Number(c.temperature) <= 75) : (Number(c.temperature) >= 13 && Number(c.temperature) <= 24)) ? 'Perfect temperature for long rides' : (state.units === 'F' ? (Number(c.temperature) < 55 ? 'Layer up for cooler temps' : 'Hydrate and avoid peak sun') : (Number(c.temperature) < 13 ? 'Layer up for cooler temps' : 'Hydrate and avoid peak sun'))}</span></li>
-          <li class="flex items-center gap-2">${icon('uv')}<span>${(c.uvIndex ?? 0) >= 6 ? 'UV protection strongly recommended' : 'UV protection recommended'}</span></li>
-        </ul>
-      </div>
-      <div class="sm:w-72 w-full sm:border-l sm:pl-4 border-gray-200 dark:border-gray-700">
-        ${explain}
-        ${bigIcon}
-      </div>
-    </div>
-  `;
-  insightsContainer.appendChild(bikeTile);
+  const penaltyRows = result.breakdown.length
+    ? result.breakdown.map(b => `<li>${escapeHtml(b.name)}: −${b.penalty}</li>`).join('')
+    : '<li>No penalties — conditions are as good as the model gets.</li>';
 
-  // Wire up the More/Less toggle
-  const moreBtn = bikeTile.querySelector('#bike-more-btn');
-  const explainDiv = bikeTile.querySelector('#bike-explain');
-  if (moreBtn && explainDiv) {
-    moreBtn.addEventListener('click', () => {
-      explainDiv.classList.toggle('hidden');
-      moreBtn.textContent = explainDiv.classList.contains('hidden') ? 'Details' : 'Less';
-    });
-  }
+  const unknownNote = result.unknown.length
+    ? `<div class="mt-2 text-xs text-gray-500 dark:text-gray-400">Not reported by the forecast model for this location, so not scored: ${escapeHtml(result.unknown.join(', '))}.</div>`
+    : '';
+
+  const comfort = temperatureComfort(c.apparentTemperature ?? c.temperature, sys);
+  const summaryLine = `${result.tier.label} conditions with ${windDescriptor(c.windSpeed)}`;
+
+  el.insights.innerHTML = `
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <div class="text-sm text-gray-600 dark:text-gray-300">
+        Selected: <span class="mr-1">${ACTIVITY_EMOJI[state.activity]}</span><span class="font-medium">${escapeHtml(DISCIPLINES[state.activity].label)}</span>
+      </div>
+      <div class="inline-flex items-center gap-2 ${t.badge} px-3 py-1 rounded-full text-sm font-medium shadow-sm">
+        ${result.tier.emoji} <span>${result.score}/10 – ${escapeHtml(result.tier.label)}</span>
+      </div>
+    </div>
+    ${alertsHtml}
+
+    <section class="mt-3 rounded-lg border ${t.border} p-4 ${t.soft}">
+      <div class="flex flex-col sm:flex-row gap-4">
+        <div class="flex-1">
+          <div class="text-lg font-semibold mb-1">Biking Conditions</div>
+          <div class="text-sm text-gray-600 dark:text-gray-300 mb-3">${escapeHtml(summaryLine)}</div>
+          <div class="text-3xl font-bold">${result.score}<span class="text-lg font-medium text-gray-500 dark:text-gray-400">/10</span></div>
+          <div class="text-sm mb-3">${escapeHtml(result.message)}</div>
+
+          <div class="text-sm font-medium mb-1">Key Factors</div>
+          <ul class="text-sm mb-3 space-y-1">
+            <li class="flex items-center gap-2">${icon('wind')}<span>Wind: ${formatSpeed(c.windSpeed, sys)} ${degToCardinal(c.windDirection)}${c.windGusts != null ? `, gusting ${formatSpeed(c.windGusts, sys)}` : ''}</span></li>
+            <li class="flex items-center gap-2">${icon('temp')}<span>Feels like: ${formatTemp(c.apparentTemperature ?? c.temperature, sys)} (${comfort})</span></li>
+            <li class="flex items-center gap-2">${icon('humidity')}<span>Rain: ${formatPercent(c.precipitationProbability)} chance</span></li>
+            <li class="flex items-center gap-2">${icon('visibility')}<span>Visibility: ${formatVisibility(c.visibility, sys)}</span></li>
+          </ul>
+
+          <div class="text-sm font-medium mb-1">Recommendations</div>
+          <ul class="text-sm space-y-1">
+            ${recommendations.map(r => `<li class="flex items-start gap-2">${icon(r.icon)}<span>${escapeHtml(r.text)}</span></li>`).join('')}
+          </ul>
+        </div>
+
+        <div class="sm:w-72 w-full sm:border-l sm:pl-4 border-gray-200 dark:border-gray-700">
+          <button id="bike-more-btn" class="text-sm underline" aria-expanded="false" aria-controls="bike-explain">Score details</button>
+          <div id="bike-explain" class="mt-2 hidden text-sm text-gray-700 dark:text-gray-200">
+            <div>Starts at 10.0, then:</div>
+            <ul class="mt-1 list-disc pl-5 space-y-0.5">${penaltyRows}</ul>
+            ${result.ceilings.length ? `<div class="mt-2">Capped at ${result.ceilings[0].cap} — ${escapeHtml(result.ceilings[0].reason.toLowerCase())}.</div>` : ''}
+            ${unknownNote}
+          </div>
+          <div class="mt-4 flex justify-center items-center">
+            <div class="relative">
+              <span class="absolute inset-0 bg-white/30 dark:bg-black/30 blur-xl rounded-full"></span>
+              <span class="relative inline-block drop-shadow-xl">
+                ${weatherIconMarkup(c.weatherCode, 'h-40 sm:h-48 md:h-56 w-auto opacity-90', isNightAt(new Date()))}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+
+  const moreBtn = el.insights.querySelector('#bike-more-btn');
+  const explain = el.insights.querySelector('#bike-explain');
+  moreBtn?.addEventListener('click', () => {
+    const hidden = explain.classList.toggle('hidden');
+    moreBtn.textContent = hidden ? 'Score details' : 'Hide details';
+    moreBtn.setAttribute('aria-expanded', String(!hidden));
+  });
+
+  wireIconFallbacks(el.insights);
 }
 
-/**
- * Goal: Display the next 24 hours forecast.
- * Why: Hourly trends (temp, rain, wind) help plan timing of a ride.
- * How: Take `next24FromNearest` or first 24 hourly entries and render tiles.
- */
+// --- Hourly -----------------------------------------------------------------
+
 function renderHourly() {
-  hourlyContainer.innerHTML = '';
-  if (!state.weather) return;
-  const next24 = state.weather.next24FromNearest && state.weather.next24FromNearest.length
-    ? state.weather.next24FromNearest
-    : state.weather.hourly.slice(0, 24);
+  if (!el.hourlyForecast || !state.weather) return;
+  const sys = state.unitSystem;
+  const scored = scoreHourlySeries(state.weather, state.activity, { hours: 24 }).slice(0, 24);
 
-  next24.forEach(h => {
-    const d = document.createElement('div');
-    d.className = 'min-w-[90px] rounded-md bg-gray-50 dark:bg-gray-700 p-3 text-center';
-    d.innerHTML = `
-      <div class="text-xs text-gray-500 dark:text-gray-300">${formatHour(h.time)}</div>
-      <div class="flex justify-center mb-1">${createWeatherIconImg(h.weatherCode, 'w-8 h-8')}</div>
-      <div class="text-lg font-semibold">${formatTemp(h.temperature)}</div>
-      <div class="text-xs">${Math.round(h.precipitationProbability ?? 0)}% rain</div>
-      <div class="text-xs">${Math.round(h.windSpeed ?? 0)} km/h</div>
-    `;
-    hourlyContainer.appendChild(d);
-  });
+  const source = scored.length
+    ? scored
+    : (state.weather.next24FromNearest || state.weather.hourly.slice(0, 24))
+        .map(h => ({ hour: h, date: new Date(h.time), score: null, tier: scoreTier(0) }));
+
+  el.hourlyForecast.innerHTML = source.map(entry => {
+    const h = entry.hour;
+    const t = tone(entry.tier.tone);
+    const night = isNightAt(entry.date);
+    return `
+      <div class="min-w-[92px] rounded-md bg-gray-50 dark:bg-gray-700 overflow-hidden text-center">
+        <div class="${entry.score == null ? TONE.gray.bar : t.bar} h-1.5 w-full"></div>
+        <div class="p-3">
+          <div class="text-xs text-gray-500 dark:text-gray-300">${formatClock(entry.date)}</div>
+          <div class="flex justify-center my-1">${weatherIconMarkup(h.weatherCode, 'w-8 h-8', night)}</div>
+          <div class="text-lg font-semibold">${formatTemp(h.temperature, sys)}</div>
+          <div class="text-xs text-gray-600 dark:text-gray-300">${formatPercent(h.precipitationProbability)} rain</div>
+          <div class="text-xs text-gray-600 dark:text-gray-300">${formatSpeed(h.windSpeed, sys)}</div>
+          ${entry.score == null ? '' : `<div class="mt-1 text-xs font-semibold ${t.badge} rounded-full px-2 py-0.5 inline-block">${entry.score}/10</div>`}
+        </div>
+      </div>`;
+  }).join('');
+
+  wireIconFallbacks(el.hourlyForecast);
 }
 
-/**
- * Goal: Show a 7‑day outlook.
- * Why: Give riders a sense of the week to schedule longer efforts.
- * How: Render each day with icon, text, max/min, precip and wind cues.
- */
+// --- Daily ------------------------------------------------------------------
+
 function renderDaily() {
-  dailyContainer.innerHTML = '';
-  if (!state.weather) return;
-  state.weather.daily.forEach(d => {
-    const el = document.createElement('div');
-    el.className = 'relative overflow-hidden rounded-md bg-gray-50 dark:bg-gray-700 p-3 text-center';
-    // Use condition SVG as a full-cover, faint background layer
-    const bgUrl = getWeatherIconPath(d.weatherCode);
-    const bg = document.createElement('div');
-    bg.setAttribute('aria-hidden', 'true');
-    bg.className = 'absolute pointer-events-none';
-    bg.style.top = '0';
-    bg.style.right = '0';
-    bg.style.width = '50%';
-    bg.style.height = '50%';
-    bg.style.backgroundImage = `url('${bgUrl}')`;
-    bg.style.backgroundRepeat = 'no-repeat';
-    bg.style.backgroundPosition = 'top right';
-    bg.style.backgroundSize = 'contain';
-    bg.style.opacity = '0.55';
-    bg.style.zIndex = '0';
-    el.appendChild(bg);
+  if (!el.dailyForecast || !state.weather) return;
+  const sys = state.unitSystem;
 
-    const content = document.createElement('div');
-    content.style.position = 'relative';
-    content.style.zIndex = '1';
-    content.innerHTML = `
-      <div class="text-sm font-medium">${formatDay(d.date)}</div>
-      <div class="text-xs text-gray-500 dark:text-gray-300 mb-1">${d.weatherText}</div>
-      <div class="text-lg font-semibold">${formatTemp(d.temperatureMax)} / ${formatTemp(d.temperatureMin)}</div>
-      <div class="text-xs">💧 ${Math.round(d.precipitationProbabilityMax ?? 0)}% · 💨 ${Math.round((d.windSpeedMax ?? 0))} km/h</div>
-    `;
-    el.appendChild(content);
-    dailyContainer.appendChild(el);
-  });
+  el.dailyForecast.innerHTML = state.weather.daily.map(d => {
+    const bgUrl = iconCandidates(d.weatherCode, false)[0];
+    return `
+      <div class="relative overflow-hidden rounded-md bg-gray-50 dark:bg-gray-700 p-3 text-center">
+        <div aria-hidden="true" class="absolute top-0 right-0 w-1/2 h-1/2 opacity-50 bg-no-repeat bg-contain bg-right-top pointer-events-none" style="background-image:url('${escapeAttr(bgUrl)}')"></div>
+        <div class="relative">
+          <div class="text-sm font-medium">${formatDay(d.date)}</div>
+          <div class="text-xs text-gray-500 dark:text-gray-300 mb-1">${escapeHtml(d.weatherText || '')}</div>
+          <div class="text-lg font-semibold">${formatTemp(d.temperatureMax, sys)} / ${formatTemp(d.temperatureMin, sys)}</div>
+          <div class="text-xs mt-1">💧 ${formatPercent(d.precipitationProbabilityMax)} · 💨 ${formatSpeed(d.windSpeedMax, sys)}</div>
+          ${d.sunrise && d.sunset ? `<div class="text-[11px] text-gray-500 dark:text-gray-400 mt-1">☀ ${formatClock(d.sunrise)}–${formatClock(d.sunset)}</div>` : ''}
+        </div>
+      </div>`;
+  }).join('');
 }
 
-/**
- * Goal: Plot daily max/min temperatures.
- * Why: Visual temperature trends are easier to scan than numbers alone.
- * How: Use Chart.js if present; convert values to selected units and label points.
- */
 function renderDailyTempChart() {
-  const canvas = document.getElementById('daily-temp-chart');
+  const canvas = el.dailyTempChart;
   if (!canvas || !state.weather || !Array.isArray(state.weather.daily)) return;
-  if (typeof window.Chart === 'undefined') return; // Chart.js not loaded
-  // Register datalabels plugin once if available
-  if (window.Chart && window.ChartDataLabels && !window.__chartDatalabelsRegistered) {
-    try { window.Chart.register(window.ChartDataLabels); window.__chartDatalabelsRegistered = true; } catch {}
+  if (typeof window.Chart === 'undefined') return;
+
+  if (window.ChartDataLabels && !window.__chartDatalabelsRegistered) {
+    try { window.Chart.register(window.ChartDataLabels); window.__chartDatalabelsRegistered = true; } catch { /* optional plugin */ }
   }
 
-  const ctx = canvas.getContext('2d');
+  const sys = state.unitSystem;
+  const unitSymbol = systemFor(sys).temp;
   const labels = state.weather.daily.map(d => formatDay(d.date));
-  const unitSymbol = state.units === 'F' ? '°F' : '°C';
-  const bodyStyles = getComputedStyle(document.body);
-  const textColor = bodyStyles.color || '#111827'; // gray-900 default
-  const gridColor = 'rgba(107,114,128,0.2)'; // gray-500/20
-
-  const toDisplayTempNumber = (celsius) => {
-    const c = Number(celsius);
-    if (Number.isNaN(c)) return null;
-    return state.units === 'F' ? Math.round(cToF(c)) : Math.round(c);
+  const toDisplay = v => {
+    const converted = convertTemp(v, sys);
+    return converted === null ? null : Math.round(converted);
   };
-
-  const tempsMax = state.weather.daily.map(d => toDisplayTempNumber(d.temperatureMax));
-  const tempsMin = state.weather.daily.map(d => toDisplayTempNumber(d.temperatureMin));
+  const textColor = getComputedStyle(document.body).color || '#111827';
 
   if (dailyTempChart) {
     dailyTempChart.destroy();
     dailyTempChart = null;
   }
 
-  dailyTempChart = new window.Chart(ctx, {
+  dailyTempChart = new window.Chart(canvas.getContext('2d'), {
     type: 'line',
     data: {
       labels,
       datasets: [
         {
           label: `Max (${unitSymbol})`,
-          data: tempsMax,
-          borderColor: 'rgb(239, 68, 68)', // red-500
+          data: state.weather.daily.map(d => toDisplay(d.temperatureMax)),
+          borderColor: 'rgb(239, 68, 68)',
           backgroundColor: 'rgba(239, 68, 68, 0.2)',
-          pointRadius: 3,
-          pointHoverRadius: 4,
-          borderWidth: 3,
-          tension: 0.3,
-          spanGaps: true
+          pointRadius: 3, pointHoverRadius: 4, borderWidth: 3, tension: 0.3, spanGaps: true
         },
         {
           label: `Min (${unitSymbol})`,
-          data: tempsMin,
-          borderColor: 'rgb(59, 130, 246)', // blue-500
+          data: state.weather.daily.map(d => toDisplay(d.temperatureMin)),
+          borderColor: 'rgb(59, 130, 246)',
           backgroundColor: 'rgba(59, 130, 246, 0.2)',
-          pointRadius: 3,
-          pointHoverRadius: 4,
-          borderWidth: 3,
-          tension: 0.3,
-          spanGaps: true
+          pointRadius: 3, pointHoverRadius: 4, borderWidth: 3, tension: 0.3, spanGaps: true
         }
       ]
     },
@@ -706,107 +975,204 @@ function renderDailyTempChart() {
         legend: { display: true, position: 'top', labels: { color: textColor } },
         tooltip: {
           callbacks: {
-            label: (ctx) => {
-              const value = ctx.parsed.y;
-              if (value == null) return '';
-              return `${ctx.dataset.label}: ${value}${unitSymbol}`;
-            }
+            label: ctx => (ctx.parsed.y == null ? '' : `${ctx.dataset.label}: ${ctx.parsed.y}${unitSymbol}`)
           }
         },
         datalabels: window.ChartDataLabels ? {
-          color: textColor,
-          clamp: true,
-          anchor: 'end',
-          align: 'top',
-          offset: 2,
-          padding: 2,
+          color: textColor, clamp: true, anchor: 'end', align: 'top', offset: 2, padding: 2,
           font: { weight: '600', size: 10 },
-          formatter: (value) => (value == null ? '' : `${value}${unitSymbol}`)
+          formatter: v => (v == null ? '' : `${v}${unitSymbol}`)
         } : undefined
       },
       scales: {
-        y: {
-          ticks: {
-            callback: (v) => `${v}${unitSymbol}`,
-            color: textColor
-          },
-          grid: { color: gridColor } // subtle grid
-        },
-        x: {
-          ticks: { color: textColor },
-          grid: { display: false }
-        }
+        y: { ticks: { callback: v => `${v}${unitSymbol}`, color: textColor }, grid: { color: 'rgba(107,114,128,0.2)' } },
+        x: { ticks: { color: textColor }, grid: { display: false } }
       }
     }
   });
 }
 
-/**
- * Goal: Let the user quickly reselect a recent location.
- * Why: Commonly revisited places should be one click away.
- * How: Read recent items from storage and render a small menu with Clear.
- */
-function renderRecentsDropdown() {
-  const recents = getRecentLocations();
-  recentsList.innerHTML = '';
-  if (!recents.length) {
-    const empty = document.createElement('div');
-    empty.className = 'px-3 py-2 text-sm text-gray-500 dark:text-gray-400';
-    empty.textContent = 'No recent locations';
-    recentsList.appendChild(empty);
-    return;
-  }
-  const header = document.createElement('div');
-  header.className = 'flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700';
-  header.innerHTML = '<div class="text-sm font-medium">Recent</div>';
-  const clearBtn = document.createElement('button');
-  clearBtn.className = 'text-xs text-red-600 hover:underline';
-  clearBtn.textContent = 'Clear';
-  clearBtn.addEventListener('click', () => { clearRecentLocations(); renderRecentsDropdown(); });
-  header.appendChild(clearBtn);
-  recentsList.appendChild(header);
+// ---------------------------------------------------------------------------
+// Scenic image (opt-in only — no key ships with the app)
+// ---------------------------------------------------------------------------
 
-  recents.forEach(r => {
-    const btn = document.createElement('button');
-    btn.className = 'w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700';
-    btn.innerHTML = `
-      <div class="font-medium">${escapeHtml(r.name)}</div>
-      <div class="text-sm text-gray-500 dark:text-gray-400">${escapeHtml(r.region || '')}${r.region && r.country ? ', ' : ''}${escapeHtml(r.country || '')} · ${Number(r.latitude).toFixed(2)}, ${Number(r.longitude).toFixed(2)}</div>
-    `;
-    btn.addEventListener('click', async () => {
-      recentsList.classList.add('hidden');
-      await loadWeather(r);
+/**
+ * Goal: Show a scenic cycling photo when the operator supplies their own key.
+ * Why: The previous build hardcoded a live Unsplash access key into a public
+ *      repository. A key must come from runtime config, never from source.
+ */
+function initScenicImage() {
+  const section = el.scenicSection;
+  const img = el.scenicImage;
+  if (!section || !img) return;
+
+  const accessKey = typeof window.UNSPLASH_ACCESS_KEY === 'string' ? window.UNSPLASH_ACCESS_KEY.trim() : '';
+  if (!accessKey) return; // stays hidden
+
+  const url = `https://api.unsplash.com/photos/random?client_id=${encodeURIComponent(accessKey)}&query=${encodeURIComponent('cycling,mountains,outdoors')}&orientation=landscape`;
+  fetch(url)
+    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+    .then(data => {
+      const src = data?.urls?.regular || data?.urls?.full;
+      if (!src) return;
+      img.src = src;
+      img.alt = data?.alt_description || 'Scenic cycling photo';
+      if (el.scenicCredit && data?.user?.name && data?.user?.links?.html) {
+        el.scenicCredit.innerHTML =
+          `Photo by <a href="${escapeAttr(data.user.links.html)}" target="_blank" rel="noopener" class="underline">${escapeHtml(data.user.name)}</a> on <a href="https://unsplash.com" target="_blank" rel="noopener" class="underline">Unsplash</a>`;
+      }
+      section.classList.remove('hidden');
+    })
+    .catch(() => { /* leave hidden */ });
+}
+
+// ---------------------------------------------------------------------------
+// Weather icons
+// ---------------------------------------------------------------------------
+
+const ICON_DIR = 'assets/icons/weather2/static';
+
+const ICON_BY_CODE = {
+  0: 'sun',
+  1: 'sun-cloud', 2: 'sun-cloud',
+  3: 'cloud',
+  45: 'fog', 48: 'fog',
+  51: 'drizzle', 53: 'drizzle', 55: 'drizzle', 56: 'drizzle', 57: 'drizzle',
+  61: 'rain', 63: 'rain', 65: 'rain', 80: 'rain', 81: 'rain', 82: 'rain',
+  // This icon pack ships no sleet/freezing-rain glyph, so point the freezing
+  // codes straight at the rain-snow mix rather than requesting a known 404.
+  // Drop a `sleet.svg` into the pack and change these two lines to use it.
+  66: 'snowy-4', 67: 'snowy-4',
+  71: 'snow', 73: 'snow', 75: 'snow', 77: 'snow', 85: 'snow', 86: 'snow',
+  95: 'storm', 96: 'storm', 99: 'storm'
+};
+
+const ICON_NIGHT = { sun: 'night', 'sun-cloud': 'cloudy-night-1', cloud: 'cloudy-night-2' };
+
+/**
+ * Fallbacks are exact file names that exist in the icon pack. The pack has no
+ * `sleet.svg`, which is why freezing-rain codes used to render as a broken image.
+ */
+const ICON_FALLBACKS = {
+  sun: ['sun-cloud', 'cloud'],
+  'sun-cloud': ['cloudy-day-2', 'sun', 'cloud'],
+  cloud: ['cloudy-day-3', 'sun-cloud'],
+  fog: ['haze', 'cloud'],
+  drizzle: ['rainy-4', 'rain', 'cloud'],
+  rain: ['rain-2', 'rainy-2', 'drizzle', 'cloud'],
+  'snowy-4': ['rainy-5', 'rain', 'cloud'],
+  snow: ['snowy-1', 'snowy-2', 'snowy-4', 'cloud'],
+  storm: ['rainy-3', 'rain', 'cloud'],
+  night: ['cloudy-night-1', 'cloud'],
+  'cloudy-night-1': ['cloudy-night-2', 'cloud'],
+  'cloudy-night-2': ['cloudy-night-3', 'cloud']
+};
+
+function iconCandidates(code, night = false) {
+  const day = ICON_BY_CODE[code] || 'cloud';
+  const base = night && ICON_NIGHT[day] ? ICON_NIGHT[day] : day;
+  // Exact-key lookup. The old code used `baseName.includes(key)`, so 'sun-cloud'
+  // matched the 'sun' entry first and inherited the wrong fallback list.
+  const alts = ICON_FALLBACKS[base] || ICON_FALLBACKS[day] || ['cloud'];
+  return [base, ...alts].map(n => `${ICON_DIR}/${n}.svg`);
+}
+
+function weatherIconMarkup(code, cls, night = false) {
+  const candidates = iconCandidates(code, night);
+  return `<img src="${escapeAttr(candidates[0])}" alt="" aria-hidden="true" class="${cls}" data-icon-fallbacks="${escapeAttr(candidates.slice(1).join('|'))}" />`;
+}
+
+/**
+ * Goal: Try each fallback icon in turn, one per failed load.
+ * Why: The old inline `onerror` concatenated every fallback into a single
+ *      handler, so all assignments ran at once and only the last URL survived —
+ *      the intermediate candidates never got a chance, and `onerror=null` meant
+ *      no retry after that. This walks the list properly.
+ */
+function wireIconFallbacks(root) {
+  if (!root) return;
+  root.querySelectorAll('img[data-icon-fallbacks]').forEach(img => {
+    if (img.dataset.iconWired === '1') return;
+    img.dataset.iconWired = '1';
+    img.addEventListener('error', () => {
+      const remaining = (img.dataset.iconFallbacks || '').split('|').filter(Boolean);
+      const next = remaining.shift();
+      img.dataset.iconFallbacks = remaining.join('|');
+      if (next) img.src = next;
+      else img.style.visibility = 'hidden';
     });
-    recentsList.appendChild(btn);
   });
 }
 
-// Utils – shared helpers for formatting and safe operations used across renderers
+function isNightAt(date) {
+  const today = state.weather?.today;
+  if (!today?.sunrise || !today?.sunset) return false;
+  const t = date.getTime();
+  const sunrise = new Date(today.sunrise).getTime();
+  const sunset = new Date(today.sunset).getTime();
+  if (Number.isNaN(sunrise) || Number.isNaN(sunset)) return false;
+  // Compare clock position within the day so tomorrow's small hours count too.
+  const minutes = date.getHours() * 60 + date.getMinutes();
+  const riseMin = new Date(sunrise).getHours() * 60 + new Date(sunrise).getMinutes();
+  const setMin = new Date(sunset).getHours() * 60 + new Date(sunset).getMinutes();
+  return minutes < riseMin || minutes > setMin;
+}
+
+// ---------------------------------------------------------------------------
+// Inline SVG icons
+// ---------------------------------------------------------------------------
+
+function icon(type) {
+  const cls = 'w-5 h-5 shrink-0 text-gray-700 dark:text-gray-200';
+  const paths = {
+    wind: '<path d="M3 12h10a3 3 0 1 0 0-6"/><path d="M2 17h14a3 3 0 1 1-3 3"/><path d="M9 9h6a3 3 0 1 0-3-3"/>',
+    temp: '<path d="M14 14.76V5a2 2 0 1 0-4 0v9.76a4 4 0 1 0 4 0Z"/>',
+    thermo: '<path d="M14 14.76V5a2 2 0 1 0-4 0v9.76a4 4 0 1 0 4 0Z"/>',
+    humidity: '<path d="M12 2.69 7.05 7.64a7 7 0 1 0 9.9 0Z"/>',
+    visibility: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+    flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1Z"/><path d="M4 22V4"/>',
+    uv: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>',
+    cloud: '<path d="M17.5 19a4.5 4.5 0 0 0 0-9 6 6 0 0 0-11.6 1.5A3.5 3.5 0 0 0 6.5 19Z"/>',
+    air: '<path d="M4 8h11a3 3 0 1 0-3-3"/><path d="M2 12h16a3 3 0 1 1-3 3"/><path d="M4 16h8"/>',
+    storm: '<path d="M17 13a4 4 0 0 0 0-8 6 6 0 0 0-11.6 1.5A3.5 3.5 0 0 0 6 13"/><path d="m12 12-2 5h4l-2 5"/>'
+  };
+  const body = paths[type];
+  if (!body) return '';
+  return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">${body}</svg>`;
+}
+
+function aIcon(type) {
+  const map = { wind: 'wind', visibility: 'visibility', wet: 'humidity', cold: 'thermo', heat: 'uv', uv: 'uv', air: 'air', storm: 'storm' };
+  return icon(map[type] || 'flag');
+}
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
 function setLocationIndicator(text) {
-  if (!locationIndicator) return;
-  const trimmed = trimLocationText(text);
-  locationIndicator.textContent = trimmed;
+  if (el.locationIndicator) el.locationIndicator.textContent = trimLocationText(text);
 }
 
-function setTitleLocation(text) {
-  // Keep a static title; do not append current location
-  if (appTitle) appTitle.textContent = 'Weather 4 Bike';
+function formatLocationName(location) {
+  return [location.name, location.region, location.country].filter(Boolean).join(', ');
 }
 
-function showToast(message) {
-  toast.textContent = message;
-  toast.classList.remove('hidden');
+function trimLocationText(text) {
+  if (!text) return '';
+  const parts = String(text).split(',').map(s => s.trim()).filter(Boolean);
+  return parts.length >= 2 ? `${parts[0]}, ${parts[1]}` : (parts[0] || '');
 }
 
-function hideToast() {
-  toast.classList.add('hidden');
+let toastTimer = null;
+function showToast(message, ms = 2500) {
+  if (!el.toast) return;
+  el.toast.textContent = message;
+  el.toast.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.toast.classList.add('hidden'), ms);
 }
 
-/**
- * Goal: Limit how often a function runs during bursts of events.
- * Why: Improves performance and respects API rate limits.
- * How: Reset a timer on each call; invoke after `delay` ms of inactivity.
- */
 function debounce(fn, delay) {
   let t;
   return (...args) => {
@@ -816,7 +1182,7 @@ function debounce(fn, delay) {
 }
 
 function escapeHtml(s) {
-  return String(s || '')
+  return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -824,163 +1190,36 @@ function escapeHtml(s) {
     .replace(/'/g, '&#039;');
 }
 
-function formatHour(iso) {
-  const d = new Date(iso);
+const escapeAttr = escapeHtml;
+
+function formatClock(value) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+/** "Tomorrow " prefix when the window is not today, so 6:00 is never ambiguous. */
+function formatDayPrefix(date) {
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) return '';
+  const tomorrow = new Date(today.getTime() + 86400000);
+  if (date.toDateString() === tomorrow.toDateString()) return 'Tomorrow ';
+  return `${date.toLocaleDateString([], { weekday: 'short' })} `;
+}
+
 function formatDay(iso) {
-  // If `iso` is a date-only string (YYYY-MM-DD), construct as local time to avoid UTC shift
+  // Date-only strings must be built as local time, or they shift a day in UTC-negative zones.
   if (typeof iso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(iso)) {
     const [y, m, d] = iso.split('-').map(Number);
-    const local = new Date(y, m - 1, d);
-    return local.toLocaleDateString([], { weekday: 'short' });
+    return new Date(y, m - 1, d).toLocaleDateString([], { weekday: 'short' });
   }
-  const d = new Date(iso);
-  return d.toLocaleDateString([], { weekday: 'short' });
+  return new Date(iso).toLocaleDateString([], { weekday: 'short' });
 }
 
 async function safeReverse(lat, lon) {
   try {
     return await reverseGeocode(lat, lon);
-  } catch (e) {
+  } catch {
     return null;
   }
 }
-
-// Unit helpers and labels
-function kmhToMph(kmh) { return kmh * 0.621371; }
-function cToF(c) { return c * 9 / 5 + 32; }
-function kmToMi(km) { return km * 0.621371; }
-function degToCardinal(deg) {
-  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-  const ix = Math.round(((deg % 360) / 22.5)) % 16;
-  return dirs[ix];
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function scoreToLabel(score) {
-  if (score >= 80) return { label: 'Excellent', emoji: '🟢', colorClass: 'text-green-600' };
-  if (score >= 60) return { label: '~Good', emoji: '🟡', colorClass: 'text-yellow-600' };
-  if (score >= 40) return { label: 'Poor', emoji: '🟠', colorClass: 'text-orange-600' };
-  return { label: 'Poor (go to swim)', emoji: '🔴', colorClass: 'text-red-600' };
-}
-
-function scoreColorClasses(score) {
-  if (score >= 80) return { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-700 dark:text-green-200' };
-  if (score >= 60) return { bg: 'bg-yellow-100 dark:bg-yellow-900/30', text: 'text-yellow-700 dark:text-yellow-200' };
-  if (score >= 40) return { bg: 'bg-orange-100 dark:bg-orange-900/30', text: 'text-orange-700 dark:text-orange-200' };
-  return { bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-200' };
-}
-
-function formatTemp(celsius) {
-  const c = Math.round(Number(celsius) || 0);
-  if (state.units === 'F') {
-    return `${Math.round(cToF(c))}°F`;
-  }
-  return `${c}°C`;
-}
-
-function trimLocationText(text) {
-  if (!text) return '';
-  // Expect "City, State, Country" or "City, State"
-  const parts = String(text).split(',').map(s => s.trim()).filter(Boolean);
-  if (parts.length >= 2) return `${parts[0]}, ${parts[1]}`; // City, State/Region
-  return parts[0] || '';
-}
-
-// Inline SVG icons
-function icon(type) {
-  const cls = 'w-5 h-5 text-gray-700 dark:text-gray-200';
-  switch (type) {
-    case 'wind':
-      return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h10a3 3 0 1 0 0-6"/><path d="M2 17h14a3 3 0 1 1-3 3"/><path d="M9 9h6a3 3 0 1 0-3-3"/></svg>`;
-    case 'temp':
-      return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 14.76V5a2 2 0 1 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg>`;
-    case 'humidity':
-      return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2.69 7.05 7.64a7 7 0 1 0 9.9 0Z"/></svg>`;
-    case 'visibility':
-      return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>`;
-    case 'flag':
-      return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1Z"/><path d="M4 22V4"/></svg>`;
-    case 'thermo':
-      return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 14.76V5a2 2 0 1 0-4 0v9.76a4 4 0 1 0 4 0Z"/></svg>`;
-    case 'uv':
-      return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>`;
-    default:
-      return '';
-  }
-}
-
-// Map alert type to an icon
-function aIcon(type) {
-  switch (type) {
-    case 'wind':
-      return icon('wind');
-    case 'visibility':
-      return icon('visibility');
-    case 'wet':
-      return icon('humidity');
-    case 'cold':
-      return icon('thermo');
-    case 'heat':
-      return icon('uv');
-    default:
-      return '';
-  }
-}
-
-// Weather icon path mapping to assets under `assets/icons/weather2/static/`
-function getWeatherIconPath(code) {
-  const map = {
-    0: 'sun', // clear
-    1: 'sun-cloud', 2: 'sun-cloud', // mainly clear/partly cloudy
-    3: 'cloud', // overcast
-    45: 'fog', 48: 'fog',
-    51: 'drizzle', 53: 'drizzle', 55: 'drizzle',
-    61: 'rain', 63: 'rain', 65: 'rain', 80: 'rain', 81: 'rain', 82: 'rain',
-    66: 'sleet', 67: 'sleet',
-    71: 'snow', 73: 'snow', 75: 'snow', 85: 'snow', 86: 'snow',
-    95: 'storm', 96: 'storm', 99: 'storm'
-  };
-  const name = map[code] || 'cloud';
-  return `assets/icons/weather2/static/${name}.svg`;
-}
-
-/**
- * Goal: Render an <img> for a weather code with robust fallbacks.
- * Why: Icon sets may vary; we try alternative filenames if the primary is missing.
- * How: Build candidate paths based on a base name and set inline onerror fallbacks.
- */
-function createWeatherIconImg(code, cls) {
-  const basePath = getWeatherIconPath(code);
-  const baseName = basePath.split('/').pop().replace('.svg','');
-  const altMap = {
-    'sun': ['clear', 'day'],
-    'sun-cloud': ['partly-cloudy', 'cloudy-day', 'cloudy-1'],
-    'cloud': ['cloudy', 'overcast'],
-    'fog': ['mist', 'haze'],
-    'drizzle': ['light-rain', 'rain-1'],
-    'rain': ['rainy', 'rain-2', 'showers'],
-    'sleet': ['rain-snow', 'hail'],
-    'snow': ['snowy', 'snow-2'],
-    'storm': ['thunder', 'thunderstorm']
-  };
-  const key = Object.keys(altMap).find(k => baseName.includes(k)) || 'cloud';
-  const dirA = 'assets/icons/weather2/static';
-  const candidates = [
-    `${dirA}/${baseName}.svg`,
-    ...altMap[key].map(n => `${dirA}/${n}.svg`),
-    // try png variants in same dir
-    `${dirA}/${baseName}.png`,
-    ...altMap[key].map(n => `${dirA}/${n}.png`)
-  ];
-  const src = candidates[0];
-  const onerror = candidates.slice(1).map(u => `this.onerror=null;this.src='${u}'`).join(';');
-  return `<img src="${src}" alt="" class="${cls}" onerror="${onerror}" />`;
-}
-
-

@@ -1,115 +1,156 @@
 # Weather 4 Bike
 
-Cycling-focused weather app providing actionable insights for road, gravel, and mountain biking.
+Cycling-focused weather app that turns a forecast into a ride decision, for road, gravel, and MTB.
 
 ## Features
 
-- Smart activity insights with safety alerts (wind, visibility, wet roads, heat/cold stress)
-- Geolocation first, city search fallback (Open‑Meteo Geocoding)
-- Hourly (next 24 hours) and 7‑day forecasts
-- Recent locations (localStorage)
-- Mobile-first UI with Tailwind, dark mode, and iconography
-- Units toggle: Celsius (default) or Fahrenheit
+- **"When should I ride?"** — scores every upcoming hour and finds the best contiguous window in the next 24 hours of daylight
+- Rideability score (1–10) per discipline, with a transparent penalty breakdown
+- Rain timing ("dry until 2pm" / "clearing around 4pm") rather than just a daily percentage
+- Safety alerts: wind, gusts, visibility, fog, ice risk, heat, thunderstorms, UV, air quality
+- Kit and pacing recommendations driven by the actual conditions
+- Sunrise/sunset, wind gusts, feels-like temperature, and AQI
+- Hourly strip colour-coded by rideability; 7-day outlook with a temperature chart
+- Geolocation first, city search fallback, recent locations
+- Full metric/imperial switching (°C·km/h·km ↔ °F·mph·mi), persisted
+- Installable PWA with offline support
+- Mobile-first, dark mode, keyboard accessible
 
-## Demo (Local)
+## Run locally
 
-Serve the repo with a static server (needed for module imports):
+The app uses ES modules, so it must be served over HTTP:
 
 ```bash
-# Example using Python
-cd weather-4-bike
 python3 -m http.server 9000
-
-# or
-php -S localhost:9000
-
-# then open http://localhost:9000/
 ```
 
-Or use any dev server (MAMP, VSCode Live Server, nginx, etc.).
+Then open `http://localhost:9000/`.
 
-## Deploy to GitHub Pages
+## Development
 
-1. Create a new GitHub repository (or use existing) and push this project to the root of the default branch (e.g., `main`).
-2. Add a file named `.nojekyll` at the project root (already included) to ensure assets are served as-is.
-3. In GitHub → Settings → Pages:
-   - Source: Deploy from a branch
-   - Branch: `main` (or your default) / Root (`/`)
-4. Save. After a minute, your site will be available at `https://<username>.github.io/<repo>/`.
+```bash
+npm install
+```
 
-Notes:
-- This is a pure static site (HTML/JS/CSS), so no build is required.
-- If using a custom domain, configure it in Pages settings and add a `CNAME` file.
+| Command | What it does |
+| --- | --- |
+| `npm run build:css` | Compile `styles/input.css` → `styles/output.css` (minified) |
+| `npm run watch:css` | Same, in watch mode |
+| `npm test` | Run the unit tests (`node --test`) |
 
-## APIs
+**Rebuild the CSS after changing markup or class names.** Tailwind purges anything it cannot see, and the compiled `styles/output.css` is committed on purpose — GitHub Pages serves this repo as-is with no build step.
 
-- Forecast: Open‑Meteo Forecast API
-  - Endpoint: `https://api.open-meteo.com/v1/forecast`
-  - Hourly fields used: `temperature_2m,relativehumidity_2m,precipitation_probability,precipitation,weathercode,surface_pressure,cloudcover,visibility,windspeed_10m,winddirection_10m,uv_index`
-  - Daily fields used: `weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max,windspeed_10m_max,uv_index_max`
-- Geocoding (search): `https://geocoding-api.open-meteo.com/v1/search`
-- Reverse Geocoding: BigDataCloud no‑key endpoint
-  - `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude={lat}&longitude={lon}&localityLanguage=en`
+> Colour classes used at runtime (score tiers, activity tabs) are written as **complete literal strings** in the lookup tables at the top of `js/app.js`. Tailwind's scanner cannot see a class name assembled by concatenation, so never build one with string interpolation.
 
-## Project Structure
+### Tests
+
+The scoring engine is pure and dependency-free, so it is directly testable:
+
+```bash
+npm test
+```
+
+63 tests cover the penalty model, unknown-vs-zero handling, hard hazard ceilings, per-discipline weighting, the best-window search, rain timing, and unit conversion.
+
+## Architecture
 
 ```
 index.html
+sw.js              # Service worker: app shell cache-first, API network-first
+tailwind.config.js
 styles/
-  input.css
-  output.css
+  input.css        # Source
+  output.css       # Compiled — committed, do not edit by hand
 js/
-  app.js       # App bootstrap + rendering (UI, units, icons, events)
-  weather.js   # Open‑Meteo fetch + parsing + formatting
-  location.js  # Geolocation, geocoding, recents
-  insights.js  # Cycling insights, penalties, safety alerts
+  app.js           # UI controller: state, events, rendering
+  weather.js       # Open-Meteo fetch, parsing, caching, air quality
+  location.js      # Geolocation, geocoding, recents
+  insights.js      # Scoring, alerts, best-window search  (pure, no DOM)
+  units.js         # Unit systems and all display formatting  (pure, no DOM)
+test/
+  insights.test.js
+  units.test.js
 assets/
-  icons/
-    weather2/static/   # Weather icon set (svg/png)
-  images/
-weather_icons_1/ (optional legacy)
+  icons/weather2/static/   # Weather icon set
 ```
 
-## UI Overview
+`insights.js` and `units.js` have no DOM or storage dependencies — that is what makes them testable, and it is worth keeping that way.
 
-- Header: title + bike icon, location indicator, search, geolocation button, units toggle, recents
-- Current Conditions card: large temp, background weather icon, compact metrics grid
-- Activity Insights: score (1–10), alerts, “Biking Conditions” tile with key factors and recommendations
-- Next 24 hours: horizontal scroll of hourly cards (time, temp, precip, wind)
-- 7‑Day forecast: compact daily cards (icon, text, hi/lo, precip, wind)
-- Scenic banner: Unsplash Source (hidden automatically on error)
+## Scoring
 
-## Units
+Every score starts at **10.0** and subtracts penalties, clamped to 1–10.
 
-- Default is Celsius (°C). Toggle to Fahrenheit (°F) via header buttons.
-- Temperatures are formatted via `formatTemp()` so values remain consistent across the app.
-- Wind is shown in km/h. Visibility shown in km (mi in some tiles). Extendable for full unit toggling.
+| Penalty | Range | Notes |
+| --- | --- | --- |
+| Wind | 0–4 | Headwind ×1.3, tailwind ×0.7, crosswind ×1.0 |
+| Gusts | 0–1.5 | Based on gust-minus-mean spread |
+| Temperature | 0–6 | Uses feels-like when available |
+| Precipitation | 0–5 | Worse of probability and intensity |
+| Humidity | 0–2 | ≥90% caps the total at 4 |
+| Visibility | 0–3 | |
+| UV | 0–1.5 | |
+| Surface / mud | 0–3 | Gravel and MTB only |
 
-## Scoring & Safety
+Per-discipline weights:
 
-- Activity scoring combines temperature, wind, precipitation, UV, humidity and recent precip (for gravel/MTB).
-- Environmental penalties (global):
-  - Heat: > 30°C reduces score; with humidity ≥ 70%, caps below 4/10
-  - Cold: < 10°C reduces score
-- Safety alerts flag wind, low visibility, wet roads, heat/cold extremes.
+| Factor | Road | Gravel | MTB |
+| --- | --- | --- | --- |
+| Wind | ×1.0 | ×1.5 | ×0.7 |
+| Gusts | ×1.0 | ×1.0 | ×0.6 |
+| Precipitation | ×1.2 | ×1.0 | ×0.9 |
+| Surface / mud | — | ×0.8 (48 h) | ×1.0 (72 h) |
+
+**Unknown is not zero.** If the forecast model does not report a variable for a location, that penalty is skipped and listed under "Score details", rather than being counted as a zero reading. A missing visibility value must not cost a rider three points.
+
+**Hard ceilings** override everything: extreme heat (2.0), thunderstorms (1.5), freezing rain (1.5), near-freezing with precipitation (2.5), snow (2.0 road / 3.0 off-road).
+
+**Bands:** 🟢 8–10 Excellent · 🟡 6–8 Good · 🟠 4–6 Fair · 🔴 2.5–4 Poor · ⛔ below 2.5 Skip it. One tier function drives the badge, the colour, and the wording, so they cannot disagree.
+
+## APIs
+
+All keyless and CORS-enabled:
+
+- **Forecast** — `https://api.open-meteo.com/v1/forecast`
+  Hourly: `temperature_2m, apparent_temperature, relativehumidity_2m, precipitation_probability, precipitation, weathercode, surface_pressure, cloudcover, visibility, windspeed_10m, winddirection_10m, windgusts_10m, uv_index`
+  Daily: `weathercode, temperature_2m_max/min, apparent_temperature_max/min, precipitation_probability_max, precipitation_sum, windspeed_10m_max, windgusts_10m_max, uv_index_max, sunrise, sunset`
+  Requested with `past_days=3` — the mud/surface factor needs recent rainfall.
+- **Air quality** — `https://air-quality-api.open-meteo.com/v1/air-quality` (best-effort; failure never blocks the forecast)
+- **Geocoding** — `https://geocoding-api.open-meteo.com/v1/search`
+- **Reverse geocoding** — BigDataCloud, no key required
+
+Responses are cached in `sessionStorage` (10 min for forecasts, 30 min for air quality). The refresh button bypasses the cache.
+
+Add `?debug=1` to the URL for verbose fetch logging.
+
+## Optional: scenic photo
+
+The scenic Unsplash banner is **off by default and ships no API key**. To enable it, create `js/config.local.js` (git-ignored):
+
+```js
+window.UNSPLASH_ACCESS_KEY = 'your-key-here';
+```
+
+and uncomment the corresponding `<script>` tag in `index.html`. Never commit a key — this repository is public.
 
 ## Icons
 
-- Weather icons are loaded from `assets/icons/weather2/static/` with runtime fallbacks for common file names.
-- Replace the set with your preferred SVG pack by dropping files into that folder; no code changes needed if file names match.
-
-## Development Notes
-
-- Tailwind is loaded via CDN for MVP. When ready, compile `styles/input.css` → `styles/output.css` and replace the CDN script with a `<link>` tag.
-- The app uses ES modules. Serve over HTTP to avoid CORS/file loading issues.
-- If the weather fetch fails, the console logs print the exact hourly set tried and response body from Open‑Meteo.
+Weather icons load from `assets/icons/weather2/static/`. Each weather code has an ordered fallback chain; if a file is missing, the next candidate is tried one at a time. The pack has no sleet glyph, so freezing-rain codes (66/67) use the rain-snow mix — drop in a `sleet.svg` and update the two lines in `ICON_BY_CODE` if you want a dedicated one.
 
 ## Accessibility
 
-- Keyboard friendly controls, ARIA on buttons, high contrast in dark mode, large touch targets on mobile.
+- City search is a proper ARIA combobox: arrow keys, Enter, Escape, `aria-activedescendant`
+- Activity tabs use the roving-tabindex pattern (arrows, Home/End)
+- Help dialog traps focus, closes on Escape, and restores focus to its trigger
+- Toast is an `aria-live` region; the error banner is `role="alert"`
+- Skip-to-content link, and `prefers-reduced-motion` is respected
+
+## Deploy to GitHub Pages
+
+Pure static site — no build step on the server. Push to the default branch, then Settings → Pages → Deploy from a branch → `main` / root. `.nojekyll` is already present.
+
+Remember to run `npm run build:css` and commit `styles/output.css` before pushing if you changed any markup.
 
 ## License
 
 - Code: MIT
-- Icons: see the license of the icon set used in `assets/icons/weather2/static/`
-- Unsplash: subject to Unsplash Source usage terms
+- Icons: see the license in `assets/icons/weather2/`

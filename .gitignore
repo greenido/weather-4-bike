@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Dependencies (Tailwind build only — the site itself ships no runtime deps)
+node_modules/
+
+# Local runtime config. Keep API keys out of the repository.
+js/config.local.js
+
+# Editor
+.vscode/
+.idea/
+
+# Note: styles/output.css IS committed on purpose. GitHub Pages serves this
+# repo as-is with no build step, so the compiled CSS has to be in the tree.
