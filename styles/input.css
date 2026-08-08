@@ -2,4 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Respect a rider's reduced-motion preference: the skeleton pulse and any
+   transitions should not animate for people who have asked them not to. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 
+/* The hourly strip is a horizontal scroller; keep its scrollbar unobtrusive
+   without hiding it entirely, which would strand trackpad-less users. */
+#hourly-forecast {
+  scrollbar-width: thin;
+}
