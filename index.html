@@ -4,101 +4,149 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Weather 4 Bike</title>
-    <meta name="description" content="Cycling-specific weather insights for road, gravel, and MTB.">
+    <meta name="description" content="Cycling-specific weather insights for road, gravel, and MTB. Find the best window to ride.">
+    <meta name="theme-color" content="#2563eb">
+
+    <!-- Social sharing -->
+    <meta property="og:title" content="Weather 4 Bike">
+    <meta property="og:description" content="Cycling-specific weather insights for road, gravel, and MTB. Find the best window to ride.">
+    <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary">
+
     <link rel="apple-touch-icon" sizes="180x180" href="assets/favicon_io/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon_io/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon_io/favicon-16x16.png">
-    <link rel="manifest" href="manifest.json">
     <link rel="icon" href="assets/favicon_io/favicon.ico">
-    <!-- Tailwind via CDN for MVP; can be replaced with compiled CSS later -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="manifest" href="manifest.json">
+
+    <link rel="preconnect" href="https://api.open-meteo.com">
+    <link rel="preconnect" href="https://air-quality-api.open-meteo.com">
+
+    <!--
+      Apply the saved theme before first paint. This has to be a blocking inline
+      script in <head>: doing it from a module (which is deferred) would render
+      one frame in the wrong theme and flash. Keep it in sync with THEME_KEY and
+      the default in js/app.js.
+    -->
     <script>
-      tailwind.config = {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            colors: {
-              road: {
-                DEFAULT: '#2563eb' // blue-600
-              },
-              gravel: {
-                DEFAULT: '#ea580c' // orange-600
-              },
-              mtb: {
-                DEFAULT: '#16a34a' // green-600
-              }
-            }
-          }
+      (function () {
+        try {
+          var saved = localStorage.getItem('w4b:theme');
+          var theme = saved === 'light' || saved === 'dark' ? saved : 'dark';
+          if (theme === 'dark') document.documentElement.classList.add('dark');
+        } catch (e) {
+          document.documentElement.classList.add('dark');
         }
-      }
+      })();
+    </script>
+
+    <!-- Compiled Tailwind. Rebuild with `npm run build:css` after changing markup. -->
+    <link rel="stylesheet" href="styles/output.css">
+
+    <!--
+      Optional: the scenic photo is off unless you supply your own Unsplash key.
+      Create js/config.local.js (git-ignored) containing:
+        window.UNSPLASH_ACCESS_KEY = 'your-key';
+      and uncomment the line below. Never commit a key to a public repo.
+    -->
+    <!-- <script src="js/config.local.js"></script> -->
+
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-NVRFBC8EXF"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-NVRFBC8EXF');
     </script>
   </head>
-  <!-- Google tag (gtag.js) -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-NVRFBC8EXF"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag(){dataLayer.push(arguments);}
-    gtag('js', new Date());
-
-    gtag('config', 'G-NVRFBC8EXF');
-  </script>
   <body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100">
+    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:m-2 focus:rounded-lg focus:bg-blue-600 focus:px-4 focus:py-2 focus:text-white">Skip to content</a>
+
     <div class="min-h-screen max-w-6xl mx-auto px-4 py-4 sm:py-6">
       <!-- Header -->
-      <header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+      <header class="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div class="flex items-center gap-3">
           <div class="flex items-center gap-2">
             <div id="app-title" class="text-2xl font-bold">Weather 4 Bike</div>
-            <img src="assets/icons/bike.svg" alt="Bike" class="w-6 h-6 opacity-80" />
+            <img src="assets/icons/bike.svg" alt="" class="w-6 h-6 opacity-80" />
           </div>
           <span id="location-indicator" class="text-sm text-gray-500 dark:text-gray-400"></span>
         </div>
-        <div class="flex items-center gap-2 sm:gap-2 w-full sm:w-auto justify-end">
-          <button id="mobile-menu-btn" class="sm:hidden rounded-lg border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" aria-label="Open menu" aria-expanded="false" aria-controls="header-controls">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-          </button>
-        </div>
-        <div id="header-controls" class="hidden flex sm:flex flex-col sm:flex-row gap-2 sm:items-center w-full sm:w-auto">
-          <div class="relative w-full sm:w-80">
-            <input id="city-search" type="text" placeholder="Search city..." aria-label="Search city" class="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <div id="search-results" class="absolute z-20 mt-1 w-full bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 hidden max-h-72 overflow-auto"></div>
+
+        <button id="mobile-menu-btn" class="sm:hidden rounded-lg border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" aria-label="Open menu" aria-expanded="false" aria-controls="header-controls">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+        </button>
+
+        <div id="header-controls" class="hidden sm:flex flex-col sm:flex-row gap-2 sm:items-center w-full sm:w-auto">
+          <div class="relative w-full sm:w-72">
+            <input
+              id="city-search"
+              type="text"
+              placeholder="Search city..."
+              aria-label="Search city"
+              role="combobox"
+              aria-expanded="false"
+              aria-controls="search-results"
+              aria-autocomplete="list"
+              autocomplete="off"
+              class="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <ul id="search-results" role="listbox" aria-label="City results" class="absolute z-20 mt-1 w-full bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 hidden max-h-72 overflow-auto"></ul>
           </div>
+
           <button id="use-geolocation" aria-label="Use current location" title="Use current location" class="rounded-full border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5">
-              <path d="M12 8v8M8 12h8"/>
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5" aria-hidden="true">
+              <path d="M12 8v8M8 12h8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>
             </svg>
           </button>
-          <div class="inline-flex rounded-full overflow-hidden border border-gray-300 dark:border-gray-700">
-            <button id="units-c" class="px-3 py-2 text-sm bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700" aria-pressed="true" title="Show temperatures in Celsius">°C</button>
-            <button id="units-f" class="px-3 py-2 text-sm bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700" aria-pressed="false" title="Show temperatures in Fahrenheit">°F</button>
+
+          <button id="refresh-btn" aria-label="Refresh forecast" title="Refresh forecast" class="rounded-full border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-5 h-5" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>
+            </svg>
+          </button>
+
+          <div class="inline-flex rounded-full overflow-hidden border border-gray-300 dark:border-gray-700" role="group" aria-label="Units">
+            <button id="units-c" class="px-3 py-2 text-sm transition-colors" aria-pressed="true" title="Metric: °C, km/h, km">°C</button>
+            <button id="units-f" class="px-3 py-2 text-sm transition-colors" aria-pressed="false" title="Imperial: °F, mph, mi">°F</button>
           </div>
-          <button id="theme-toggle" class="rounded-lg border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" aria-label="Toggle dark mode" title="Toggle dark/light mode">
-            <svg id="theme-toggle-dark-icon" class="w-5 h-5 hidden" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+
+          <button id="theme-toggle" class="rounded-full border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" aria-label="Switch to light mode" title="Toggle dark/light mode" aria-pressed="true">
+            <svg id="theme-toggle-dark-icon" class="w-5 h-5 hidden" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
               <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"></path>
             </svg>
-            <svg id="theme-toggle-light-icon" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+            <svg id="theme-toggle-light-icon" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
               <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"></path>
             </svg>
           </button>
+
           <div class="relative">
-            <button id="recents-toggle" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Recent</button>
+            <button id="recents-toggle" aria-haspopup="true" aria-expanded="false" aria-controls="recents-list" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Recent</button>
             <div id="recents-list" class="absolute right-0 mt-2 z-10 w-72 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 hidden max-h-80 overflow-auto"></div>
           </div>
+
           <a href="https://greenido.github.io/weather-bike-routes/" target="_blank" rel="noopener" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Bike Routes</a>
           <button id="help-button" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" aria-haspopup="dialog" aria-controls="help-modal" aria-expanded="false">Help</button>
         </div>
       </header>
 
-      
+      <!-- Inline error state (replaces the blank screen on failure) -->
+      <div id="error-banner" class="hidden mb-4 rounded-lg border border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/30 px-4 py-3" role="alert">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <div class="font-semibold text-red-800 dark:text-red-200">Could not load the forecast</div>
+            <div id="error-detail" class="text-sm text-red-700 dark:text-red-300"></div>
+          </div>
+          <button id="error-retry" class="self-start sm:self-auto rounded-lg bg-red-600 px-4 py-2 text-white text-sm font-medium hover:bg-red-700 transition-colors">Try again</button>
+        </div>
+      </div>
 
-      <!-- Main Content -->
-      <main class="grid grid-cols-1 gap-4 items-start">
-        <!-- Current Conditions Card -->
-        <section class="relative overflow-hidden rounded-lg shadow-lg p-4 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-gray-800 dark:to-gray-700">
+      <main id="main-content" class="grid grid-cols-1 gap-4 items-start">
+        <!-- Current Conditions -->
+        <section class="relative overflow-hidden rounded-lg shadow-lg p-4 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-gray-800 dark:to-gray-700" aria-labelledby="current-heading">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-lg font-semibold">Current Conditions</h2>
+            <h2 id="current-heading" class="text-lg font-semibold">Current Conditions</h2>
+            <span id="current-updated" class="text-xs text-gray-500 dark:text-gray-400"></span>
           </div>
           <div class="flex items-center gap-4 mb-4">
             <div id="current-summary" class="flex-1"></div>
@@ -106,82 +154,143 @@
           <div id="current-conditions" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
         </section>
 
-        <!-- Detailed Insights -->
-        <section id="insights-card" class="rounded-lg shadow-lg p-4 bg-white/90 dark:bg-gray-800/90 backdrop-blur">
+        <!-- Best window to ride -->
+        <section id="best-window-card" class="rounded-lg shadow-lg p-4 bg-white dark:bg-gray-800" aria-labelledby="best-window-heading">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-lg font-semibold">Activity Insights</h2>
+            <h2 id="best-window-heading" class="text-lg font-semibold">When should I ride?</h2>
+            <span class="text-xs text-gray-500 dark:text-gray-400">Next 24 hours, daylight only</span>
+          </div>
+          <div id="best-window"></div>
+        </section>
+
+        <!-- Activity Insights -->
+        <section id="insights-card" class="rounded-lg shadow-lg p-4 bg-white/90 dark:bg-gray-800/90 backdrop-blur" aria-labelledby="insights-heading">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <h2 id="insights-heading" class="text-lg font-semibold">Activity Insights</h2>
             <div class="inline-flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700" role="tablist" aria-label="Select cycling activity">
-              <button id="activity-road" data-activity="road" class="px-4 py-2 text-road font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="true">Road</button>
-              <button id="activity-gravel" data-activity="gravel" class="px-4 py-2 text-gravel font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="false">Gravel</button>
-              <button id="activity-mtb" data-activity="mtb" class="px-4 py-2 text-mtb font-medium bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none" role="tab" aria-selected="false">MTB</button>
+              <button id="activity-road" data-activity="road" class="px-4 py-2 font-medium focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500" role="tab" aria-selected="true" aria-controls="insights">Road</button>
+              <button id="activity-gravel" data-activity="gravel" class="px-4 py-2 font-medium focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500" role="tab" aria-selected="false" aria-controls="insights" tabindex="-1">Gravel</button>
+              <button id="activity-mtb" data-activity="mtb" class="px-4 py-2 font-medium focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500" role="tab" aria-selected="false" aria-controls="insights" tabindex="-1">MTB</button>
             </div>
           </div>
-          <div id="insights" class="space-y-3"></div>
+          <div id="insights" role="tabpanel" class="space-y-3"></div>
         </section>
 
         <!-- Hourly Forecast -->
-        <section class="rounded-lg shadow-lg p-4 bg-white dark:bg-gray-800">
-          <h2 class="text-lg font-semibold mb-3">Next 24 Hours</h2>
+        <section class="rounded-lg shadow-lg p-4 bg-white dark:bg-gray-800" aria-labelledby="hourly-heading">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <h2 id="hourly-heading" class="text-lg font-semibold">Next 24 Hours</h2>
+            <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400" aria-hidden="true">
+              <span>Rideability</span>
+              <span class="inline-block w-4 h-3 rounded-sm bg-red-400"></span>
+              <span class="inline-block w-4 h-3 rounded-sm bg-orange-400"></span>
+              <span class="inline-block w-4 h-3 rounded-sm bg-yellow-400"></span>
+              <span class="inline-block w-4 h-3 rounded-sm bg-green-400"></span>
+            </div>
+          </div>
           <div id="hourly-forecast" class="flex gap-3 overflow-x-auto pb-2"></div>
         </section>
 
         <!-- 7-Day Forecast -->
-        <section class="rounded-lg shadow-lg p-4 bg-white dark:bg-gray-800">
-          <h2 class="text-lg font-semibold mb-3">7-Day Forecast</h2>
+        <section class="rounded-lg shadow-lg p-4 bg-white dark:bg-gray-800" aria-labelledby="daily-heading">
+          <h2 id="daily-heading" class="text-lg font-semibold mb-3">7-Day Forecast</h2>
           <div id="daily-forecast" class="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-3"></div>
           <div class="mt-4">
-            <canvas id="daily-temp-chart" height="220" aria-label="Daily temperatures chart" role="img"></canvas>
+            <canvas id="daily-temp-chart" height="220" aria-label="Daily high and low temperatures for the next 7 days" role="img"></canvas>
           </div>
         </section>
       </main>
 
-      <!-- Scenic cycling image (Unsplash Source API) -->
-      <section class="rounded-lg overflow-hidden shadow-lg mt-4">
-        <img id="scenic-image" src="" alt="Scenic cycling" class="w-full h-80 sm:h-96 md:h-[28rem] lg:h-[32rem] object-cover" loading="lazy" referrerpolicy="no-referrer" />
+      <!-- Scenic cycling image. Hidden unless an Unsplash key is supplied at runtime. -->
+      <section id="scenic-section" class="rounded-lg overflow-hidden shadow-lg mt-4 hidden">
+        <img id="scenic-image" src="" alt="" class="w-full h-80 sm:h-96 md:h-[28rem] lg:h-[32rem] object-cover" loading="lazy" referrerpolicy="no-referrer" />
         <div id="scenic-credit" class="text-[11px] text-gray-500 dark:text-gray-400 px-2 py-1"></div>
       </section>
+
+      <footer class="mt-6 mb-2 text-xs text-gray-500 dark:text-gray-400 text-center">
+        Forecast by <a href="https://open-meteo.com/" target="_blank" rel="noopener" class="underline">Open-Meteo</a>.
+        Weather icons by <a href="https://www.flaticon.com/free-icons/weather" target="_blank" rel="noopener" class="underline">Flaticon</a>.
+      </footer>
 
       <!-- Help / About Modal -->
       <div id="help-modal" class="fixed inset-0 z-50 hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
         <div id="help-overlay" class="absolute inset-0 bg-black/50"></div>
-        <div class="relative mx-auto mt-16 w-[92%] sm:w-[640px] bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700">
-          <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+        <div class="relative mx-auto mt-10 w-[92%] sm:w-[680px] max-h-[85vh] overflow-auto bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700">
+          <div class="sticky top-0 flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
             <h3 id="help-title" class="text-lg font-semibold">How the Bike Score is calculated</h3>
             <button id="help-close" class="rounded-md p-1 hover:bg-gray-100 dark:hover:bg-gray-700" aria-label="Close help">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <div class="px-4 py-4 text-sm leading-6 space-y-3">
-            <p>The Road Bike score starts at 10.0 and deducts points based on current conditions. Final score is clamped to 1–10.</p>
-            <ul class="list-disc pl-6 space-y-2">
-              <li><strong>Wind (0–4 pts)</strong>: ≤10 km/h (0), ≤20 (−1), ≤30 (−2), ≤40 (−3), &gt;40 (−4). Direction adjusts impact: headwind ×1.3, tailwind ×0.7, crosswind = base.</li>
-              <li><strong>Temperature (0–3 pts)</strong>: 15–25°C (0), 10–15 or 25–30 (−1), 5–10 or 30–35 (−2), otherwise (−3).</li>
-              <li><strong>Humidity (0–2 pts)</strong>: ≤60% (0), ≤80% (−1), &gt;80% (−2).</li>
-              <li><strong>Visibility (0–3 pts)</strong>: ≥10 km (0), ≥5 (−1), ≥2 (−2), &lt;2 (−3).</li>
-            </ul>
-            <p>Messages are based on the final score: ≥8 Perfect, ≥6 Good, ≥4 Decent, ≥3 Challenging, else Poor.</p>
-            <p class="text-gray-500 dark:text-gray-400">Note: Wind direction is treated as crosswind by default since route direction is unknown.</p>
+
+          <div class="px-4 py-4 text-sm leading-6 space-y-4">
+            <p>Every score starts at <strong>10.0</strong> and subtracts penalties for the conditions. The result is clamped to 1–10. If a measurement is unavailable, its penalty is <em>skipped</em> rather than counted as zero — unknown is not the same as perfect.</p>
+
+            <div>
+              <div class="font-semibold mb-1">Penalties</div>
+              <ul class="list-disc pl-6 space-y-1">
+                <li><strong>Wind</strong> (0–4): ≤10 km/h (0), ≤20 (−1), ≤30 (−2), ≤40 (−3), &gt;40 (−4). Headwind ×1.3, tailwind ×0.7, crosswind ×1.0.</li>
+                <li><strong>Gusts</strong> (0–1.5): based on the gap between gust and mean wind — that spread is what actually moves the bike.</li>
+                <li><strong>Temperature</strong> (0–6): 15–25°C (0), 10–15 or 25–30 (−1), 5–10 (−2), 30–35 (−3.5), &gt;35 (−6), 0–5 (−3), below 0 (−4.5). Uses <em>feels-like</em> when available.</li>
+                <li><strong>Precipitation</strong> (0–5): the worse of how likely rain is and how hard it is falling.</li>
+                <li><strong>Humidity</strong> (0–2): ≤60% (0), ≤80% (−1), &gt;80% (−2). At ≥90% the total is capped at 4.</li>
+                <li><strong>Visibility</strong> (0–3): ≥10 km (0), ≥5 (−1), ≥2 (−2), &lt;2 (−3).</li>
+                <li><strong>UV</strong> (0–1.5): ≤5 (0), ≤7 (−0.5), ≤9 (−1), above (−1.5).</li>
+                <li><strong>Surface / mud</strong> (gravel and MTB only, 0–3): from rain accumulated over the last 48 h (gravel) or 72 h (MTB).</li>
+              </ul>
+            </div>
+
+            <div>
+              <div class="font-semibold mb-1">Per-discipline weighting</div>
+              <p>The same penalties are weighted differently per discipline, because the same weather is not the same ride:</p>
+              <div class="overflow-x-auto mt-2">
+                <table class="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr class="border-b border-gray-200 dark:border-gray-700">
+                      <th class="py-1 pr-3 font-semibold">Factor</th>
+                      <th class="py-1 pr-3 font-semibold">Road</th>
+                      <th class="py-1 pr-3 font-semibold">Gravel</th>
+                      <th class="py-1 font-semibold">MTB</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr class="border-b border-gray-100 dark:border-gray-700/50"><td class="py-1 pr-3">Wind</td><td class="py-1 pr-3">×1.0</td><td class="py-1 pr-3">×1.5</td><td class="py-1">×0.7</td></tr>
+                    <tr class="border-b border-gray-100 dark:border-gray-700/50"><td class="py-1 pr-3">Gusts</td><td class="py-1 pr-3">×1.0</td><td class="py-1 pr-3">×1.0</td><td class="py-1">×0.6</td></tr>
+                    <tr class="border-b border-gray-100 dark:border-gray-700/50"><td class="py-1 pr-3">Precipitation</td><td class="py-1 pr-3">×1.2</td><td class="py-1 pr-3">×1.0</td><td class="py-1">×0.9</td></tr>
+                    <tr><td class="py-1 pr-3">Surface / mud</td><td class="py-1 pr-3">—</td><td class="py-1 pr-3">×0.8 (48 h)</td><td class="py-1">×1.0 (72 h)</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div>
+              <div class="font-semibold mb-1">Hard ceilings</div>
+              <p>Some conditions cap the score no matter how good everything else is: extreme heat (cap 2.0), thunderstorms (1.5), freezing rain (1.5), near-freezing with precipitation (2.5), and snow (2.0 road / 3.0 off-road).</p>
+            </div>
+
+            <div>
+              <div class="font-semibold mb-1">Score bands</div>
+              <p>🟢 8–10 Excellent · 🟡 6–8 Good · 🟠 4–6 Fair · 🔴 2.5–4 Poor · ⛔ below 2.5 Skip it. The same band drives the badge, the colour, and the wording everywhere in the app.</p>
+            </div>
+
+            <p class="text-gray-500 dark:text-gray-400">Note: wind is treated as a crosswind by default, since your route direction is unknown.</p>
             <p class="text-gray-500 dark:text-gray-400">
-              🚴🏼 A bit more context: <a href="https://greenido.wordpress.com/2025/08/18/weather-4-bike-from-forecasts-to-ride-decisions/" target="_blank" rel="noopener" class="underline">Blog Post on the project.</a>
+              🚴🏼 A bit more context: <a href="https://greenido.wordpress.com/2025/08/18/weather-4-bike-from-forecasts-to-ride-decisions/" target="_blank" rel="noopener" class="underline">Blog post on the project.</a>
             </p>
           </div>
-          <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <div class="text-xs text-gray-500 dark:text-gray-400">Weather icons by <a href="https://www.flaticon.com/free-icons/weather" target="_blank" rel="noopener" class="underline">Flaticon</a>.</div>
-            <button id="help-close-2" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 self-end sm:self-auto">Close</button>
+
+          <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex justify-end">
+            <button id="help-close-2" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700">Close</button>
           </div>
         </div>
       </div>
 
-      
-
       <!-- Toasts / Messages -->
-      <div id="toast" class="fixed bottom-4 left-1/2 -translate-x-1/2 bg-gray-900 text-white rounded-lg px-4 py-2 shadow-lg hidden"></div>
+      <div id="toast" class="fixed bottom-4 left-1/2 -translate-x-1/2 bg-gray-900 text-white rounded-lg px-4 py-2 shadow-lg hidden z-40" role="status" aria-live="polite"></div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0" defer></script>
     <script type="module" src="js/app.js"></script>
   </body>
-  </html>
-
-
+</html>
