@@ -3,7 +3,10 @@ export default {
   // Every colour class used at runtime is written as a complete literal string
   // in js/app.js (see the TONE tables), so scanning the JS is enough — no safelist.
   content: ['./index.html', './js/**/*.js'],
-  darkMode: 'media',
+  // 'class' rather than 'media' so the header toggle can override the OS setting.
+  // Every `dark:` variant compiles to a `.dark` ancestor selector, and app.js puts
+  // that class on <html>.
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {

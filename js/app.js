@@ -38,12 +38,16 @@ const state = {
   weather: null,
   airQuality: null,
   unitSystem: 'metric',   // 'metric' | 'imperial'
+  theme: 'dark',          // 'dark' | 'light'
   loading: false,
   error: null
 };
 
 const UNITS_KEY = 'w4b:units';
 const ACTIVITY_KEY = 'w4b:activity';
+// Also read by the pre-paint inline script in index.html — keep both in sync.
+const THEME_KEY = 'w4b:theme';
+const DEFAULT_THEME = 'dark';
 
 // --- Colour tables. Full literal class strings so Tailwind keeps them. ------
 
@@ -110,7 +114,8 @@ function cacheElements() {
     'best-window', 'toast', 'error-banner', 'error-detail', 'error-retry',
     'mobile-menu-btn', 'header-controls', 'help-button', 'help-modal', 'help-overlay',
     'help-close', 'help-close-2', 'units-c', 'units-f', 'scenic-section', 'scenic-image',
-    'scenic-credit', 'daily-temp-chart'
+    'scenic-credit', 'daily-temp-chart',
+    'theme-toggle', 'theme-toggle-dark-icon', 'theme-toggle-light-icon'
   ];
   ids.forEach(id => { el[camel(id)] = document.getElementById(id); });
   el.activityButtons = ['activity-road', 'activity-gravel', 'activity-mtb']
@@ -135,6 +140,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   cacheElements();
   loadPreferences();
   bindUI();
+  // The inline head script already put the class on <html> to avoid a flash;
+  // this re-asserts it and syncs the toggle's icon and labels.
+  applyTheme(state.theme, { persist: false });
   updateUnitsToggleUI();
   updateActivityTabsUI();
   registerServiceWorker();
@@ -168,6 +176,9 @@ function loadPreferences() {
 
     const activity = localStorage.getItem(ACTIVITY_KEY);
     if (activity && DISCIPLINES[activity]) state.activity = activity;
+
+    const theme = localStorage.getItem(THEME_KEY);
+    state.theme = theme === 'light' || theme === 'dark' ? theme : DEFAULT_THEME;
   } catch {
     // Private mode — defaults are fine.
   }
@@ -194,6 +205,7 @@ function bindUI() {
   bindSearch();
   bindRecents();
   bindUnits();
+  bindTheme();
   bindHelpModal();
 
   el.useGeolocation?.addEventListener('click', async () => {
@@ -296,6 +308,48 @@ function updateUnitsToggleUI() {
   el.unitsF.className = `${base} ${metric ? inactive : active}`;
   el.unitsC.setAttribute('aria-pressed', String(metric));
   el.unitsF.setAttribute('aria-pressed', String(!metric));
+}
+
+// --- Theme -------------------------------------------------------------------
+
+/**
+ * Goal: Switch between dark and light, and remember the choice.
+ * Why: The OS setting is a reasonable default but a poor mandate — riders read
+ *      this outdoors, where the right theme depends on glare, not on time of day.
+ * How: Toggle a `dark` class on <html> (Tailwind is configured `darkMode: 'class'`)
+ *      and persist it under THEME_KEY, which the pre-paint script in index.html
+ *      reads on the next load.
+ */
+function applyTheme(theme, { persist = true } = {}) {
+  const next = theme === 'light' ? 'light' : 'dark';
+  state.theme = next;
+  document.documentElement.classList.toggle('dark', next === 'dark');
+
+  // Keep the address-bar / task-switcher colour in step with the app.
+  document.querySelector('meta[name="theme-color"]')
+    ?.setAttribute('content', next === 'dark' ? '#111827' : '#2563eb');
+
+  updateThemeToggleUI();
+  if (persist) savePreference(THEME_KEY, next);
+}
+
+function updateThemeToggleUI() {
+  const dark = state.theme === 'dark';
+  // Show the sun while dark (click to go light), and the moon while light.
+  el.themeToggleLightIcon?.classList.toggle('hidden', !dark);
+  el.themeToggleDarkIcon?.classList.toggle('hidden', dark);
+  el.themeToggle?.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+  el.themeToggle?.setAttribute('aria-pressed', String(dark));
+}
+
+function bindTheme() {
+  el.themeToggle?.addEventListener('click', () => {
+    applyTheme(state.theme === 'dark' ? 'light' : 'dark');
+    // The chart reads its label colour from the computed body colour at build
+    // time, so it has to be rebuilt or its axes keep the old theme's contrast.
+    renderDailyTempChart();
+    showToast(state.theme === 'dark' ? 'Dark mode' : 'Light mode', 1200);
+  });
 }
 
 // --- Search combobox --------------------------------------------------------
