@@ -46,7 +46,13 @@ const HOURLY_PARAMS = [
   'windspeed_10m',
   'winddirection_10m',
   'windgusts_10m',
-  'uv_index'
+  'uv_index',
+  // Surface condition for gravel/MTB. Volumetric water content of the top layer
+  // is a far better mud signal than summing rainfall, because the model has
+  // already accounted for drying via sun, wind and evapotranspiration.
+  'soil_moisture_0_to_1cm',
+  'soil_moisture_1_to_3cm',
+  'et0_fao_evapotranspiration'
 ].join(',');
 
 // Fallback set: only variables Open‑Meteo has supported on every model.
@@ -80,7 +86,9 @@ const DAILY_PARAMS = [
 // Cache
 // ---------------------------------------------------------------------------
 
-const CACHE_PREFIX = 'w4b:cache:v2:';
+// Bump when the requested variable set changes, so cached responses from an
+// older shape are not reused without the new fields.
+const CACHE_PREFIX = 'w4b:cache:v3:';
 const FORECAST_TTL_MS = 10 * 60 * 1000;
 const AIR_TTL_MS = 30 * 60 * 1000;
 
@@ -260,7 +268,12 @@ export function parseWeatherResponse(data) {
     visibility: getSafe(data.hourly?.visibility, idx),
     cloudCover: getSafe(data.hourly?.cloudcover, idx),
     uvIndex: getSafe(data.hourly?.uv_index, idx),
-    pressure: getSafe(data.hourly?.surface_pressure, idx)
+    pressure: getSafe(data.hourly?.surface_pressure, idx),
+    // Prefer the very top layer — that is what tyres touch. Fall back to the
+    // next band down, which some models publish when the shallowest is absent.
+    soilMoisture: getSafe(data.hourly?.soil_moisture_0_to_1cm, idx)
+      ?? getSafe(data.hourly?.soil_moisture_1_to_3cm, idx),
+    evapotranspiration: getSafe(data.hourly?.et0_fao_evapotranspiration, idx)
   }));
 
   const current = hourly[nearestIndex] ? { ...hourly[nearestIndex] } : emptyCurrent();
@@ -308,7 +321,9 @@ function emptyCurrent() {
     visibility: null,
     cloudCover: null,
     uvIndex: null,
-    pressure: null
+    pressure: null,
+    soilMoisture: null,
+    evapotranspiration: null
   };
 }
 

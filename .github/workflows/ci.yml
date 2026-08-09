@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      # styles/output.css and the sw.js cache version are build artifacts that
+      # are committed, because GitHub Pages serves this repo with no build step.
+      # That makes "someone changed the markup and forgot to rebuild" a real way
+      # to ship broken styling or a stale offline cache with a clean-looking diff.
+      # Rebuild here and fail if anything moved.
+      - name: Build artifacts are up to date
+        run: |
+          npm run build
+          if ! git diff --quiet; then
+            echo "::error::Committed build artifacts are stale. Run 'npm run build' and commit the result."
+            git diff --stat
+            git diff
+            exit 1
+          fi

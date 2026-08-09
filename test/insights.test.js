@@ -12,7 +12,8 @@ import assert from 'node:assert/strict';
 import {
   scoreConditions, scoreTier, scoreHourlySeries, findBestWindow, findRainTiming,
   recentPrecipSum, mudFactorFromRain, generateSafetyAlerts, generateRecommendations,
-  DISCIPLINES, num
+  surfaceState, resolveSurface, ridingWindChill, windRelationFor, scoreOutAndBack,
+  comfortBand, DEFAULT_COMFORT_BAND, DISCIPLINES, num
 } from '../js/insights.js';
 
 /** A calm, mild, dry, clear day — the baseline that should score 10. */
@@ -202,7 +203,7 @@ describe('disciplines differ in more than a wind multiplier', () => {
     assert.equal(road.score, 10, 'tarmac drains; 25 mm two days ago is irrelevant');
     assert.ok(gravel.score < 10, 'gravel should carry a mud penalty');
     assert.ok(mtb.score < 10, 'trails should carry a mud penalty');
-    assert.ok(gravel.breakdown.some(b => b.name === 'Surface / mud'));
+    assert.ok(gravel.breakdown.some(b => b.name === 'Surface'));
   });
 
   test('every discipline has a complete profile', () => {
@@ -457,5 +458,321 @@ describe('generateRecommendations', () => {
       'mtb'
     );
     assert.ok(recs.some(r => /trail/i.test(r.text)));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Surface model (soil moisture)
+// ---------------------------------------------------------------------------
+
+describe('surfaceState', () => {
+  test('reads volumetric water content as a named riding surface', () => {
+    assert.equal(surfaceState(0.05).state, 'dusty');
+    assert.equal(surfaceState(0.12).state, 'dry');
+    assert.equal(surfaceState(0.22).state, 'tacky');
+    assert.equal(surfaceState(0.30).state, 'soft');
+    assert.equal(surfaceState(0.38).state, 'muddy');
+    assert.equal(surfaceState(0.45).state, 'saturated');
+  });
+
+  test('both extremes cost something, the middle is free', () => {
+    assert.equal(surfaceState(0.22).mud, 0);
+    assert.equal(surfaceState(0.22).dust, 0);
+    assert.ok(surfaceState(0.05).dust > 0, 'bone dry should be penalised as loose');
+    assert.ok(surfaceState(0.45).mud > 0);
+  });
+
+  test('unknown moisture is unknown, not dry', () => {
+    assert.equal(surfaceState(null), null);
+    assert.equal(surfaceState(undefined), null);
+  });
+});
+
+describe('resolveSurface', () => {
+  test('prefers modelled soil moisture over the rainfall proxy', () => {
+    // Heavy recent rain, but the model says the top layer has already dried.
+    const s = resolveSurface(0.12, 40, 72);
+    assert.equal(s.source, 'soil-moisture');
+    assert.equal(s.mud, 0, 'a hot windy day can dry a trail that rain totals still condemn');
+  });
+
+  test('falls back to rainfall when soil moisture is missing', () => {
+    const s = resolveSurface(null, 25, 48);
+    assert.equal(s.source, 'rainfall');
+    assert.equal(s.mud, 3);
+  });
+
+  test('returns null when neither signal is available', () => {
+    assert.equal(resolveSurface(null, null, 48), null);
+  });
+});
+
+describe('soil moisture in scoring', () => {
+  const base = { ...PERFECT };
+
+  test('saturated ground hurts off-road but not the road', () => {
+    const wet = { ...base, soilMoisture: 0.45 };
+    assert.equal(scoreConditions(wet, { discipline: 'road' }).score, 10);
+    assert.ok(scoreConditions(wet, { discipline: 'gravel' }).score < 8);
+    assert.ok(scoreConditions(wet, { discipline: 'mtb' }).score < 8);
+  });
+
+  test('tacky ground is a free pass', () => {
+    const tacky = { ...base, soilMoisture: 0.22 };
+    assert.equal(scoreConditions(tacky, { discipline: 'mtb' }).score, 10);
+    assert.equal(scoreConditions(tacky, { discipline: 'mtb' }).surface.state, 'tacky');
+  });
+
+  test('dust is penalised for MTB more than gravel, and not at all on road', () => {
+    const dusty = { ...base, soilMoisture: 0.05 };
+    const mtb = scoreConditions(dusty, { discipline: 'mtb' });
+    const gravel = scoreConditions(dusty, { discipline: 'gravel' });
+    assert.ok(mtb.score < gravel.score);
+    assert.equal(scoreConditions(dusty, { discipline: 'road' }).score, 10);
+  });
+
+  test('surface is reported for off-road and absent for road', () => {
+    const r = scoreConditions({ ...base, soilMoisture: 0.38 }, { discipline: 'gravel' });
+    assert.equal(r.surface.state, 'muddy');
+    assert.match(r.message, /Muddy/);
+    assert.equal(scoreConditions(base, { discipline: 'road' }).surface, null);
+  });
+
+  test('off-road with no surface signal reports it as unknown', () => {
+    const r = scoreConditions(base, { discipline: 'mtb' });
+    assert.ok(r.unknown.includes('Surface'));
+    assert.equal(r.score, 10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Riding wind chill
+// ---------------------------------------------------------------------------
+
+describe('ridingWindChill', () => {
+  test('a moving rider feels colder than the thermometer', () => {
+    const chill = ridingWindChill(5, 15, 28, 'crosswind');
+    assert.ok(chill < 5, `expected below 5C, got ${chill}`);
+    assert.ok(chill > -15, 'and not absurdly low');
+  });
+
+  test('a headwind chills harder than a tailwind at the same speed', () => {
+    const head = ridingWindChill(4, 20, 28, 'headwind');
+    const tail = ridingWindChill(4, 20, 28, 'tailwind');
+    assert.ok(head < tail);
+  });
+
+  test('a faster discipline chills harder in the same weather', () => {
+    const road = ridingWindChill(3, 10, DISCIPLINES.road.ridingSpeedKmh);
+    const mtb = ridingWindChill(3, 10, DISCIPLINES.mtb.ridingSpeedKmh);
+    assert.ok(road < mtb, 'road speeds should feel colder than trail speeds');
+  });
+
+  test('does not apply above 10C, where the formula is undefined', () => {
+    assert.equal(ridingWindChill(20, 30, 28), 20);
+  });
+
+  test('unknown inputs stay unknown', () => {
+    assert.equal(ridingWindChill(null, 10, 28), null);
+    assert.equal(ridingWindChill(5, 10, null), null);
+  });
+
+  test('feeds a bounded penalty only below freezing', () => {
+    const mild = scoreConditions({ ...PERFECT, temperatureC: 12, windKmh: 10 }, { discipline: 'road' });
+    assert.ok(!mild.breakdown.some(b => b.name === 'Wind chill'), 'no chill penalty on a mild day');
+
+    const freezing = scoreConditions(
+      { ...PERFECT, temperatureC: -2, apparentTemperatureC: -4, windKmh: 25 },
+      { discipline: 'road' }
+    );
+    assert.ok(freezing.breakdown.some(b => b.name === 'Wind chill'));
+    assert.ok(freezing.ridingFeelsLikeC < -2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Route-aware wind
+// ---------------------------------------------------------------------------
+
+describe('windRelationFor', () => {
+  test('wind from the direction you are heading is a headwind', () => {
+    assert.equal(windRelationFor(0, 0), 'headwind');    // heading N, wind from N
+    assert.equal(windRelationFor(90, 90), 'headwind');  // heading E, wind from E
+  });
+
+  test('wind from behind is a tailwind', () => {
+    assert.equal(windRelationFor(0, 180), 'tailwind');
+    assert.equal(windRelationFor(270, 90), 'tailwind');
+  });
+
+  test('wind from the side is a crosswind', () => {
+    assert.equal(windRelationFor(0, 90), 'crosswind');
+    assert.equal(windRelationFor(0, 270), 'crosswind');
+  });
+
+  test('handles wrap-around', () => {
+    assert.equal(windRelationFor(350, 10), 'headwind');
+    assert.equal(windRelationFor(10, 190), 'tailwind');
+  });
+
+  test('unknown heading falls back to crosswind', () => {
+    assert.equal(windRelationFor(null, 90), 'crosswind');
+    assert.equal(windRelationFor(90, null), 'crosswind');
+  });
+});
+
+describe('scoreOutAndBack', () => {
+  const windy = {
+    current: {
+      temperature: 16, apparentTemperature: 16, humidity: 50, windSpeed: 35,
+      windDirection: 0, precipitation: 0, precipitationProbability: 0,
+      visibility: 20000, uvIndex: 2, weatherCode: 0
+    },
+    hourly: []
+  };
+
+  test('scores the two legs differently and names the relation', () => {
+    const r = scoreOutAndBack(windy, 'road', 0); // heading north into a north wind
+    assert.equal(r.out.relation, 'headwind');
+    assert.equal(r.back.relation, 'tailwind');
+    assert.ok(r.out.score < r.back.score);
+  });
+
+  test('endorses starting into the wind', () => {
+    const r = scoreOutAndBack(windy, 'road', 0);
+    assert.match(r.advice, /hard leg is first/i);
+  });
+
+  test('suggests reversing when the tailwind comes first', () => {
+    const r = scoreOutAndBack(windy, 'road', 180); // heading south, wind from north
+    assert.equal(r.out.relation, 'tailwind');
+    assert.match(r.advice, /reverse/i);
+  });
+
+  test('says direction is moot in a crosswind', () => {
+    const r = scoreOutAndBack(windy, 'road', 90);
+    assert.equal(r.out.relation, 'crosswind');
+    assert.equal(r.back.relation, 'crosswind');
+    assert.match(r.advice, /barely matters/i);
+  });
+
+  test('returns null without a heading', () => {
+    assert.equal(scoreOutAndBack(windy, 'road', null), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Personal calibration
+// ---------------------------------------------------------------------------
+
+describe('comfortBand', () => {
+  test('rejects nonsense and falls back to the default', () => {
+    assert.deepEqual(comfortBand(null), DEFAULT_COMFORT_BAND);
+    assert.deepEqual(comfortBand([25, 15]), DEFAULT_COMFORT_BAND, 'inverted band');
+    assert.deepEqual(comfortBand(['a', 'b']), DEFAULT_COMFORT_BAND);
+    assert.deepEqual(comfortBand([10, 30]), [10, 30]);
+  });
+});
+
+describe('personal comfort band in scoring', () => {
+  test('the default band reproduces the previous fixed thresholds exactly', () => {
+    const cases = [[18, 0], [12, 1], [7, 2], [2, 3], [-3, 4.5], [28, 1], [33, 3.5], [40, 6]];
+    for (const [temp, expectedPenalty] of cases) {
+      const r = scoreConditions(
+        { ...PERFECT, temperatureC: temp, apparentTemperatureC: temp, windKmh: 0, uvIndex: 0 },
+        { discipline: 'road' }
+      );
+      const entry = r.allPenalties.find(b => b.name === 'Temperature');
+      assert.equal(entry.penalty, expectedPenalty, `at ${temp}C`);
+    }
+  });
+
+  test('a heat-adapted rider is not punished for a warm day', () => {
+    const hot = { ...PERFECT, temperatureC: 30, apparentTemperatureC: 30 };
+    const standard = scoreConditions(hot, { discipline: 'road' });
+    const adapted = scoreConditions(hot, { discipline: 'road', comfortBand: [20, 33] });
+    assert.ok(adapted.score > standard.score);
+    assert.equal(adapted.allPenalties.find(b => b.name === 'Temperature').penalty, 0);
+  });
+
+  test('a cold-adapted rider is not punished for a cool day', () => {
+    const cool = { ...PERFECT, temperatureC: 8, apparentTemperatureC: 8 };
+    const standard = scoreConditions(cool, { discipline: 'road' });
+    const adapted = scoreConditions(cool, { discipline: 'road', comfortBand: [5, 18] });
+    assert.ok(adapted.score > standard.score);
+  });
+
+  test('the band is echoed back so the UI can show what was used', () => {
+    const r = scoreConditions(PERFECT, { discipline: 'road', comfortBand: [10, 30] });
+    assert.deepEqual(r.comfortBand, [10, 30]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Week-long planning
+// ---------------------------------------------------------------------------
+
+describe('week-long window search', () => {
+  test('finds a window beyond the first 24 hours', () => {
+    const base = onTheHour();
+    const bad = { windSpeed: 70, precipitationProbability: 100, precipitation: 8 };
+    // 40 bad hours, then a good stretch on "day 2".
+    const specs = Array.from({ length: 60 }, (_, i) => (i >= 44 && i < 50 ? {} : bad));
+    const weather = { hourly: buildHourly(base, specs) };
+
+    const scored = scoreHourlySeries(weather, 'road', { now: base, hours: 72 });
+    const within24 = findBestWindow(scored, { now: base, withinHours: 24, minHours: 3, maxHours: 3 });
+    const withinWeek = findBestWindow(scored, { now: base, withinHours: 168, minHours: 3, maxHours: 3 });
+
+    assert.ok(withinWeek.score > within24.score, 'the week search should find the good day');
+    assert.ok(withinWeek.start.getTime() >= base.getTime() + 44 * 3600 * 1000);
+  });
+
+  test('honours a requested ride duration', () => {
+    const base = onTheHour();
+    const weather = { hourly: buildHourly(base, Array.from({ length: 24 }, () => ({}))) };
+    const scored = scoreHourlySeries(weather, 'road', { now: base, hours: 24 });
+
+    for (const duration of [1, 2, 3, 5]) {
+      const w = findBestWindow(scored, { now: base, minHours: duration, maxHours: duration });
+      assert.equal(w.hours, duration, `expected a ${duration}h window`);
+    }
+  });
+});
+
+describe('scoreOutAndBack advice does not contradict the leg labels', () => {
+  const calm = {
+    current: {
+      temperature: 16, apparentTemperature: 16, humidity: 50, windSpeed: 2,
+      windDirection: 247, precipitation: 0, precipitationProbability: 0,
+      visibility: 20000, uvIndex: 2, weatherCode: 0
+    },
+    hourly: []
+  };
+
+  test('a breeze too light to change the score says so', () => {
+    // Heading NE into a WSW wind: labelled tailwind out, headwind back — but at
+    // 2 km/h both legs score the same, so "the hard leg is first" would be a lie.
+    const r = scoreOutAndBack(calm, 'road', 45);
+    assert.equal(r.out.relation, 'tailwind');
+    assert.equal(r.back.relation, 'headwind');
+    assert.equal(r.out.score, r.back.score);
+    assert.match(r.advice, /light enough/i);
+    assert.doesNotMatch(r.advice, /hard leg is first/i);
+  });
+
+  test('advice always agrees with which leg actually scores worse', () => {
+    for (const heading of [0, 45, 90, 135, 180, 225, 270, 315]) {
+      for (const windSpeed of [2, 15, 35, 55]) {
+        const weather = { ...calm, current: { ...calm.current, windSpeed } };
+        const r = scoreOutAndBack(weather, 'road', heading);
+        if (/hard leg is first/i.test(r.advice)) {
+          assert.ok(r.out.score < r.back.score, `heading ${heading} at ${windSpeed} km/h`);
+        }
+        if (/reverse/i.test(r.advice)) {
+          assert.ok(r.out.score > r.back.score, `heading ${heading} at ${windSpeed} km/h`);
+        }
+      }
+    }
   });
 });
