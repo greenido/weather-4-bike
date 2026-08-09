@@ -13,7 +13,7 @@
   - Everything else (CDN scripts, photos): passes straight through.
 */
 
-const VERSION = 'fdab5dd0bfef';
+const VERSION = 'a5ae11a6e83d';
 const SHELL_CACHE = `w4b-shell-${VERSION}`;
 const DATA_CACHE = `w4b-data-${VERSION}`;
 

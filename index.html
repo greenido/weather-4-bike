@@ -23,19 +23,22 @@
     <link rel="preconnect" href="https://air-quality-api.open-meteo.com">
 
     <!--
-      Apply the saved theme before first paint. This has to be a blocking inline
-      script in <head>: doing it from a module (which is deferred) would render
-      one frame in the wrong theme and flash. Keep it in sync with THEME_KEY and
-      the default in js/app.js.
+      Apply the theme before first paint. This has to be a blocking inline script
+      in <head>: doing it from a module (which is deferred) would render one frame
+      in the wrong theme and flash. Keep it in sync with THEME_KEY and
+      systemTheme() in js/app.js.
+
+      No stored choice means follow the OS. Only an explicit toggle overrides it.
     -->
     <script>
       (function () {
         try {
           var saved = localStorage.getItem('w4b:theme');
-          var theme = saved === 'light' || saved === 'dark' ? saved : 'dark';
-          if (theme === 'dark') document.documentElement.classList.add('dark');
+          var dark = saved === 'dark' || (saved !== 'light' &&
+            window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
         } catch (e) {
-          document.documentElement.classList.add('dark');
+          // No storage or no matchMedia: fall through to the light default.
         }
       })();
     </script>

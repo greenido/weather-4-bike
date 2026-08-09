@@ -39,7 +39,8 @@ const state = {
   weather: null,
   airQuality: null,
   unitSystem: 'metric',   // 'metric' | 'imperial'
-  theme: 'dark',          // 'dark' | 'light'
+  theme: 'light',         // 'dark' | 'light' — the theme currently showing
+  themeSource: 'system',  // 'system' | 'user' — whether the rider chose it
   rideHours: 2,           // how long the rider wants to be out
   routeBearing: null,     // compass bearing of the outbound leg, or null
   comfortBand: null,      // rider-calibrated [minC, maxC], or null for the default
@@ -52,7 +53,6 @@ const UNITS_KEY = 'w4b:units';
 const ACTIVITY_KEY = 'w4b:activity';
 // Also read by the pre-paint inline script in index.html — keep both in sync.
 const THEME_KEY = 'w4b:theme';
-const DEFAULT_THEME = 'dark';
 const RIDE_HOURS_KEY = 'w4b:rideHours';
 const BEARING_KEY = 'w4b:routeBearing';
 const COMFORT_KEY = 'w4b:comfortBand';
@@ -160,7 +160,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindUI();
   // The inline head script already put the class on <html> to avoid a flash;
   // this re-asserts it and syncs the toggle's icon and labels.
-  applyTheme(state.theme, { persist: false });
+  applyTheme(state.theme, { persist: false, source: state.themeSource });
   updateUnitsToggleUI();
   updateActivityTabsUI();
   registerServiceWorker();
@@ -196,7 +196,13 @@ function loadPreferences() {
     if (activity && DISCIPLINES[activity]) state.activity = activity;
 
     const theme = localStorage.getItem(THEME_KEY);
-    state.theme = theme === 'light' || theme === 'dark' ? theme : DEFAULT_THEME;
+    if (theme === 'light' || theme === 'dark') {
+      state.theme = theme;
+      state.themeSource = 'user';
+    } else {
+      state.theme = systemTheme();
+      state.themeSource = 'system';
+    }
 
     const hours = Number(localStorage.getItem(RIDE_HOURS_KEY));
     if (Number.isFinite(hours) && hours >= 1 && hours <= 6) state.rideHours = hours;
@@ -355,17 +361,28 @@ function updateUnitsToggleUI() {
 
 // --- Theme -------------------------------------------------------------------
 
+/** What the operating system is currently asking for. */
+function systemTheme() {
+  try {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
 /**
- * Goal: Switch between dark and light, and remember the choice.
- * Why: The OS setting is a reasonable default but a poor mandate — riders read
- *      this outdoors, where the right theme depends on glare, not on time of day.
- * How: Toggle a `dark` class on <html> (Tailwind is configured `darkMode: 'class'`)
- *      and persist it under THEME_KEY, which the pre-paint script in index.html
- *      reads on the next load.
+ * Goal: Show the OS theme by default, and let the rider override it.
+ * Why: Following the system is the right default — someone who has set their
+ *      whole machine to light should not be handed a dark app. But it is a poor
+ *      mandate: outdoors the right theme depends on glare, not on the OS.
+ * How: Toggle a `dark` class on <html> (Tailwind runs `darkMode: 'class'`).
+ *      Only an explicit toggle writes THEME_KEY; until then nothing is stored
+ *      and the pre-paint script in index.html falls back to the media query.
  */
-function applyTheme(theme, { persist = true } = {}) {
+function applyTheme(theme, { persist = true, source = 'user' } = {}) {
   const next = theme === 'light' ? 'light' : 'dark';
   state.theme = next;
+  state.themeSource = source;
   document.documentElement.classList.toggle('dark', next === 'dark');
 
   // Keep the address-bar / task-switcher colour in step with the app.
@@ -383,6 +400,12 @@ function updateThemeToggleUI() {
   el.themeToggleDarkIcon?.classList.toggle('hidden', dark);
   el.themeToggle?.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
   el.themeToggle?.setAttribute('aria-pressed', String(dark));
+  el.themeToggle?.setAttribute(
+    'title',
+    state.themeSource === 'system'
+      ? 'Following your system theme — click to override'
+      : 'Toggle dark/light mode'
+  );
 }
 
 function bindTheme() {
@@ -392,6 +415,17 @@ function bindTheme() {
     // Chart.js canvas it replaced, which baked its label colour in at build time.
     showToast(state.theme === 'dark' ? 'Dark mode' : 'Light mode', 1200);
   });
+
+  // Track the OS while the rider has not overridden it, so flipping the system
+  // theme updates a page that is already open.
+  try {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+      if (state.themeSource !== 'system') return;
+      applyTheme(e.matches ? 'dark' : 'light', { persist: false, source: 'system' });
+    });
+  } catch {
+    // Safari < 14 has no addEventListener on MediaQueryList; static default is fine.
+  }
 }
 
 // --- Planner controls (ride length, route direction) ------------------------
