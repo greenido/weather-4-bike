@@ -5,7 +5,9 @@
   "type": "module",
   "description": "Cycling-specific weather insights for road, gravel, and MTB.",
   "scripts": {
+    "build": "npm run build:css && npm run build:sw",
     "build:css": "tailwindcss -i styles/input.css -o styles/output.css --minify",
+    "build:sw": "node scripts/stamp-sw.js",
     "watch:css": "tailwindcss -i styles/input.css -o styles/output.css --watch",
     "test": "node --test test/*.test.js",
     "serve": "python3 -m http.server 9000"

@@ -4,7 +4,12 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 
 ## Features
 
-- **"When should I ride?"** — scores every upcoming hour and finds the best contiguous window in the next 24 hours of daylight
+- **"When should I ride?"** — scores every hour of the week and finds the best contiguous window of daylight, for the ride length you choose. Shows today's best and flags when later in the week is better
+- **Route-aware wind** — pick which way you head out and it scores the outbound and return legs separately, then tells you which direction to start in
+- **Real surface conditions** — gravel and MTB scores use the model's soil moisture, not a rainfall total, so it knows a trail has already dried
+- **Wind chill at riding speed** — what it actually feels like at 28 km/h, not standing still
+- **Compare locations** — score your saved spots side by side and see where the riding is best
+- **Calibrated to you** — set your own comfortable temperature range and typical speed
 - Rideability score (1–10) per discipline, with a transparent penalty breakdown
 - Rain timing ("dry until 2pm" / "clearing around 4pm") rather than just a daily percentage
 - Safety alerts: wind, gusts, visibility, fog, ice risk, heat, thunderstorms, UV, air quality
@@ -35,9 +40,13 @@ npm install
 
 | Command | What it does |
 | --- | --- |
+| `npm run build` | Everything below that produces a committed artifact |
 | `npm run build:css` | Compile `styles/input.css` → `styles/output.css` (minified) |
-| `npm run watch:css` | Same, in watch mode |
+| `npm run build:sw` | Stamp the service worker cache version from the app-shell hash |
+| `npm run watch:css` | CSS build in watch mode |
 | `npm test` | Run the unit tests (`node --test`) |
+
+CI runs the tests and then runs `npm run build`, failing if it leaves the tree dirty. Both `styles/output.css` and the `VERSION` in `sw.js` are committed artifacts, so "changed the markup, forgot to rebuild" would otherwise ship broken styling or a stale offline cache behind a clean-looking diff.
 
 **Rebuild the CSS after changing markup or class names.** Tailwind purges anything it cannot see, and the compiled `styles/output.css` is committed on purpose — GitHub Pages serves this repo as-is with no build step.
 
@@ -103,7 +112,9 @@ Every score starts at **10.0** and subtracts penalties, clamped to 1–10.
 | Humidity | 0–2 | ≥90% caps the total at 4 |
 | Visibility | 0–3 | |
 | UV | 0–1.5 | |
-| Surface / mud | 0–3 | Gravel and MTB only |
+| Wind chill on the bike | 0–1.5 | Below freezing only, at the airspeed a moving rider meets |
+| Surface | 0–3 | Gravel and MTB only |
+| Dust / loose | 0–1 | Gravel and MTB only, at the dry end |
 
 Per-discipline weights:
 
@@ -112,7 +123,17 @@ Per-discipline weights:
 | Wind | ×1.0 | ×1.5 | ×0.7 |
 | Gusts | ×1.0 | ×1.0 | ×0.6 |
 | Precipitation | ×1.2 | ×1.0 | ×0.9 |
-| Surface / mud | — | ×0.8 (48 h) | ×1.0 (72 h) |
+| Surface | — | ×0.8 | ×1.0 |
+| Dust / loose | — | ×0.4 | ×0.6 |
+| Riding speed (for chill) | 28 km/h | 22 km/h | 15 km/h |
+
+### Surface
+
+Gravel and MTB scores read the forecast model's **volumetric soil water content** for the top layer, which already accounts for drying by sun, wind and evapotranspiration — the thing a rainfall total cannot see. Both ends cost points: saturated is mud, bone-dry is loose and blown out, and "tacky" in between is free. Where a model does not publish soil moisture, it falls back to accumulated rainfall over 48 h (gravel) or 72 h (MTB), and the UI says so.
+
+### Personal calibration
+
+The comfort band defaults to 15–25°C and can be moved in Settings. With the default band the penalties are numerically identical to the old fixed thresholds — there is a test pinning that.
 
 **Unknown is not zero.** If the forecast model does not report a variable for a location, that penalty is skipped and listed under "Score details", rather than being counted as a zero reading. A missing visibility value must not cost a rider three points.
 

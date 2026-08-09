@@ -25,8 +25,12 @@
  * - windWeight:   exposure to steady wind (gravel is the most exposed).
  * - gustWeight:   sensitivity to gust spread (deep road wheels suffer most).
  * - precipWeight: how much active/likely rain hurts the ride.
- * - mudWeight:    how much *recent* rain hurts the surface.
- * - mudWindowH:   how far back surface memory reaches.
+ * - mudWeight:    how much a wet surface hurts the ride.
+ * - mudWindowH:   how far back the rainfall fallback looks, when modelled soil
+ *                 moisture is unavailable (see surfaceState).
+ * - dustWeight:   how much a bone-dry, blown-out surface hurts.
+ * - ridingSpeedKmh: typical moving speed. Used to work out the airspeed a rider
+ *                 actually feels, which is what decides how cold a ride is.
  */
 export const DISCIPLINES = {
   road: {
@@ -35,8 +39,10 @@ export const DISCIPLINES = {
     windWeight: 1.0,
     gustWeight: 1.0,
     precipWeight: 1.2, // wet tarmac + traffic is the worst combination
-    mudWeight: 0,      // road surfaces drain; only current rain matters
+    mudWeight: 0,      // tarmac drains; only current rain matters
     mudWindowH: 0,
+    dustWeight: 0,
+    ridingSpeedKmh: 28,
     heatCeiling: 35,
     messages: {
       excellent: 'Perfect conditions. Go for that long ride! 🚴',
@@ -54,6 +60,8 @@ export const DISCIPLINES = {
     precipWeight: 1.0,
     mudWeight: 0.8,
     mudWindowH: 48,
+    dustWeight: 0.4,   // loose dry gravel is sketchy in corners
+    ridingSpeedKmh: 22,
     heatCeiling: 34,
     messages: {
       excellent: 'Great day for gravel! Tyres up, get out there.',
@@ -71,6 +79,8 @@ export const DISCIPLINES = {
     precipWeight: 0.9,
     mudWeight: 1.0,  // trail damage is the dominant concern
     mudWindowH: 72,
+    dustWeight: 0.6, // blown-out dusty trails lose all grip
+    ridingSpeedKmh: 15,
     heatCeiling: 34,
     messages: {
       excellent: 'Trails are prime!',
@@ -134,6 +144,71 @@ function directionMultiplier(relation) {
 }
 
 /**
+ * Goal: Work out whether a given heading puts the wind in your face or at your back.
+ * Why: Wind direction was displayed but never used — every score assumed a
+ *      crosswind because the route direction was unknown. Once the rider says
+ *      which way they are going, the multiplier above finally has real input.
+ * How: Open-Meteo reports the direction wind blows *from*. If that matches the
+ *      direction you are heading toward, it is in your face.
+ *
+ * @param {number} headingDeg - compass bearing the rider is travelling toward
+ * @param {number} windFromDeg - direction the wind is coming from
+ */
+export function windRelationFor(headingDeg, windFromDeg) {
+  const heading = num(headingDeg);
+  const from = num(windFromDeg);
+  if (heading === null || from === null) return 'crosswind';
+  // Smallest angle between "where the wind comes from" and "where you're going".
+  // 0° means it is blowing straight into your face; 180° means straight behind.
+  const offNose = Math.abs(((from - heading + 540) % 360) - 180);
+  if (offNose <= 45) return 'headwind';
+  if (offNose >= 135) return 'tailwind';
+  return 'crosswind';
+}
+
+/**
+ * Goal: The temperature a rider actually feels, given that they are moving.
+ * Why: `apparent_temperature` assumes near-still air. A rider at 28 km/h into a
+ *      20 km/h headwind sits in ~48 km/h of airflow; on a descent it is worse.
+ *      This is the difference between "cool" and "cannot feel my hands", and it
+ *      is the most cycling-specific number the app can show.
+ * How: Environment Canada wind chill over the airspeed the rider meets. The
+ *      formula is only defined at or below 10°C and above ~5 km/h of air
+ *      movement; outside that range the ambient temperature is the honest answer.
+ */
+export function ridingWindChill(tempC, windKmh, ridingSpeedKmh, relation = 'crosswind') {
+  const t = num(tempC);
+  const wind = num(windKmh) ?? 0;
+  const speed = num(ridingSpeedKmh);
+  if (t === null || speed === null) return null;
+
+  let airspeed;
+  switch (String(relation).toLowerCase()) {
+    case 'headwind': airspeed = speed + wind; break;
+    case 'tailwind': airspeed = Math.abs(speed - wind); break;
+    // A crosswind still adds to airspeed, just not linearly.
+    default: airspeed = Math.sqrt(speed * speed + wind * wind);
+  }
+
+  if (t > 10 || airspeed < 5) return t;
+  const v = Math.pow(airspeed, 0.16);
+  return round1(13.12 + 0.6215 * t - 11.37 * v + 0.3965 * t * v);
+}
+
+/**
+ * Penalty for being genuinely cold on the bike, on top of the ambient
+ * temperature penalty. Bounded and only below freezing, so it sharpens the
+ * winter picture without double-counting `apparent_temperature`.
+ */
+function windChillPenalty(chillC) {
+  const c = num(chillC);
+  if (c === null || c >= 0) return c === null ? null : 0;
+  if (c >= -5) return 0.5;
+  if (c >= -10) return 1;
+  return 1.5;
+}
+
+/**
  * Gusts matter more than mean wind for bike handling: it is the *spread* between
  * lull and gust that moves the bike, not the average.
  */
@@ -148,16 +223,44 @@ function gustPenalty(windKmh, gustKmh) {
   return 0;
 }
 
-function temperaturePenalty(tempC) {
+/** The default comfort band, in °C. Riders can move it — see `comfortBand`. */
+export const DEFAULT_COMFORT_BAND = [15, 25];
+
+/**
+ * Goal: Penalise temperature relative to what *this* rider finds comfortable.
+ * Why: A rider acclimatised in Tel Aviv and one in Seattle do not agree on what
+ *      15°C means. A fixed band makes the score feel wrong for both of them.
+ * How: Penalties grow with distance outside the band, in the same steps the
+ *      fixed thresholds used to hardcode. With the default band the numbers are
+ *      identical to before, so existing behaviour is preserved.
+ */
+function temperaturePenalty(tempC, band = DEFAULT_COMFORT_BAND) {
   const t = num(tempC);
   if (t === null) return null;
-  if (t >= 15 && t <= 25) return 0;
-  if ((t >= 10 && t < 15) || (t > 25 && t <= 30)) return 1;
-  if (t >= 5 && t < 10) return 2;
-  if (t > 30 && t <= 35) return 3.5;
-  if (t > 35) return 6;
-  if (t >= 0 && t < 5) return 3;
+  const [lo, hi] = band;
+  if (t >= lo && t <= hi) return 0;
+
+  if (t > hi) {
+    const over = t - hi;
+    if (over <= 5) return 1;
+    if (over <= 10) return 3.5;
+    return 6;
+  }
+
+  const under = lo - t;
+  if (under <= 5) return 1;
+  if (under <= 10) return 2;
+  if (t >= 0) return 3;
   return 4.5; // sub-zero
+}
+
+/** Clamp a rider-supplied comfort band to something the scorer can use. */
+export function comfortBand(band) {
+  if (!Array.isArray(band) || band.length !== 2) return DEFAULT_COMFORT_BAND;
+  const lo = num(band[0]);
+  const hi = num(band[1]);
+  if (lo === null || hi === null || lo >= hi) return DEFAULT_COMFORT_BAND;
+  return [clamp(lo, -20, 40), clamp(hi, -19, 45)];
 }
 
 function humidityPenalty(humidityPct) {
@@ -220,8 +323,10 @@ function uvPenalty(uvIndex) {
 
 /**
  * Goal: Turn accumulated recent rainfall into a 0–3 surface/mud factor.
- * Why: This is the entire reason gravel and MTB are separate tabs — without it
- *      they are just "road with a different wind multiplier".
+ * Why: Fallback for locations or models where soil moisture is not published.
+ * Note: This is the weaker signal. 15 mm two days ago means nothing after a hot
+ *       windy day and everything after a cold damp one — rainfall alone cannot
+ *       tell those apart, which is why `surfaceState` prefers soil moisture.
  */
 export function mudFactorFromRain(totalMm, windowHours) {
   const mm = num(totalMm);
@@ -232,6 +337,47 @@ export function mudFactorFromRain(totalMm, windowHours) {
   if (mm >= 10 * scale) return 2;
   if (mm >= 3 * scale) return 1;
   return 0;
+}
+
+/**
+ * Goal: Describe what the ground is actually like to ride on.
+ * Why: This is the entire reason gravel and MTB are separate tabs. Rainfall
+ *      totals are a proxy for it; volumetric soil water content *is* it, and
+ *      the weather model already accounts for drying through evapotranspiration,
+ *      sun and wind — the exact thing a rain sum cannot see.
+ * How: Map volumetric water content (m³/m³, roughly 0 to ~0.5 at saturation)
+ *      onto a named state. Both ends are bad: saturated is mud, bone-dry is
+ *      loose and blown out. "Tacky" in the middle is what everyone hopes for.
+ *
+ * Thresholds are for typical loam. They are deliberately coarse — the point is
+ * to separate "hero dirt" from "stay home", not to model soil science.
+ *
+ * @returns {{state: string, mud: number, dust: number, label: string}|null}
+ */
+export function surfaceState(volumetricWaterContent) {
+  const vwc = num(volumetricWaterContent);
+  if (vwc === null) return null;
+  if (vwc < 0.10) return { state: 'dusty', mud: 0, dust: 1, label: 'Dusty and loose' };
+  if (vwc < 0.16) return { state: 'dry', mud: 0, dust: 0.5, label: 'Dry and fast' };
+  if (vwc < 0.27) return { state: 'tacky', mud: 0, dust: 0, label: 'Tacky — hero dirt' };
+  if (vwc < 0.34) return { state: 'soft', mud: 1, dust: 0, label: 'Soft in places' };
+  if (vwc < 0.41) return { state: 'muddy', mud: 2, dust: 0, label: 'Muddy' };
+  return { state: 'saturated', mud: 3, dust: 0, label: 'Saturated — let it dry' };
+}
+
+/**
+ * Goal: Resolve the surface however we can, best signal first.
+ * How: Modelled soil moisture when the forecast carries it; otherwise fall back
+ *      to accumulated rainfall so off-road scoring still works.
+ */
+export function resolveSurface(soilMoisture, recentRainMm, windowHours) {
+  const modelled = surfaceState(soilMoisture);
+  if (modelled) return { ...modelled, source: 'soil-moisture' };
+
+  const mud = mudFactorFromRain(recentRainMm, windowHours);
+  if (mud === null) return null;
+  const label = ['Dry', 'Damp in places', 'Muddy', 'Saturated — let it dry'][mud];
+  return { state: ['dry', 'soft', 'muddy', 'saturated'][mud], mud, dust: 0, label, source: 'rainfall' };
 }
 
 // ---------------------------------------------------------------------------
@@ -265,17 +411,24 @@ export function scoreTier(score10) {
  *
  * @param {object} conditions - temperatureC, apparentTemperatureC, humidityPct,
  *   windKmh, windGustKmh, precipitationProbabilityPct, precipitationMm,
- *   visibilityKm, uvIndex, weatherCode
- * @param {object} options - { discipline, windRelation, recentRainMm }
+ *   visibilityKm, uvIndex, weatherCode, soilMoisture
+ * @param {object} options - { discipline, windRelation, recentRainMm,
+ *   comfortBand, ridingSpeedKmh }
  */
 export function scoreConditions(conditions = {}, options = {}) {
   const profile = DISCIPLINES[options.discipline] || DISCIPLINES.road;
   const windRelation = options.windRelation || 'crosswind';
+  const band = comfortBand(options.comfortBand);
+  const ridingSpeed = num(options.ridingSpeedKmh) ?? profile.ridingSpeedKmh;
 
   // Prefer "feels like" for the comfort judgement — that is what the rider feels.
   const feelsLike = num(conditions.apparentTemperatureC);
   const airTemp = num(conditions.temperatureC);
   const comfortTemp = feelsLike !== null ? feelsLike : airTemp;
+
+  // What it feels like once you are moving. Ambient "feels like" assumes still
+  // air; this is the number that decides whether you can feel your hands.
+  const chill = ridingWindChill(airTemp, conditions.windKmh, ridingSpeed, windRelation);
 
   const breakdown = [];
   const unknown = [];
@@ -298,7 +451,8 @@ export function scoreConditions(conditions = {}, options = {}) {
     profile.windWeight
   );
   apply('Gusts', gustPenalty(conditions.windKmh, conditions.windGustKmh), profile.gustWeight);
-  apply('Temperature', temperaturePenalty(comfortTemp));
+  apply('Temperature', temperaturePenalty(comfortTemp, band));
+  apply('Wind chill', windChillPenalty(chill));
   apply('Humidity', humidityPenalty(conditions.humidityPct));
   apply(
     'Precipitation',
@@ -308,10 +462,19 @@ export function scoreConditions(conditions = {}, options = {}) {
   apply('Visibility', visibilityPenalty(conditions.visibilityKm));
   apply('UV', uvPenalty(conditions.uvIndex));
 
-  // Surface memory — gravel and MTB only.
+  // Surface condition — gravel and MTB only. Prefers modelled soil moisture and
+  // falls back to accumulated rainfall; see resolveSurface.
+  let surface = null;
   if (profile.mudWeight > 0) {
-    const mud = mudFactorFromRain(options.recentRainMm, profile.mudWindowH);
-    apply('Surface / mud', mud, profile.mudWeight);
+    surface = resolveSurface(conditions.soilMoisture, options.recentRainMm, profile.mudWindowH);
+    if (surface === null) {
+      unknown.push('Surface');
+    } else {
+      apply('Surface', surface.mud, profile.mudWeight);
+      if (profile.dustWeight > 0 && surface.dust > 0) {
+        apply('Dust / loose', surface.dust, profile.dustWeight);
+      }
+    }
   }
 
   // Very high humidity compounds everything else.
@@ -350,6 +513,10 @@ export function scoreConditions(conditions = {}, options = {}) {
   if (uv !== null && uv >= 7) message += ' Consider riding early or late — UV is high.';
   if (ceilings.length) message = `${ceilings[0].reason}. ${message}`;
 
+  if (surface && surface.mud >= 2) {
+    message += ` ${surface.label}.`;
+  }
+
   return {
     score,
     tier,
@@ -358,7 +525,11 @@ export function scoreConditions(conditions = {}, options = {}) {
     breakdown: breakdown.filter(b => b.penalty !== 0),
     allPenalties: breakdown,
     unknown,
-    ceilings
+    ceilings,
+    surface,                 // null for road, or { state, label, source, ... }
+    ridingFeelsLikeC: chill, // what it feels like once you are moving
+    windRelation,
+    comfortBand: band
   };
 }
 
@@ -366,14 +537,57 @@ export function scoreConditions(conditions = {}, options = {}) {
  * Goal: Score the conditions the app currently shows as "now".
  * Why: Convenience wrapper so callers do not reshape the weather object by hand.
  */
-export function scoreCurrent(weatherData, discipline = 'road', windRelation = 'crosswind') {
+export function scoreCurrent(weatherData, discipline = 'road', options = {}) {
+  // Older call sites passed a windRelation string here.
+  const opts = typeof options === 'string' ? { windRelation: options } : options;
   const c = weatherData?.current || {};
   const profile = DISCIPLINES[discipline] || DISCIPLINES.road;
   const recentRainMm = profile.mudWindowH
     ? recentPrecipSum(weatherData?.hourly, profile.mudWindowH)
     : null;
 
-  return scoreConditions(toConditions(c), { discipline, windRelation, recentRainMm });
+  return scoreConditions(toConditions(c), { discipline, recentRainMm, ...opts });
+}
+
+/**
+ * Goal: Score an out-and-back in both directions and say which way to set off.
+ * Why: On a windy day the single most useful piece of advice is "ride out into
+ *      it, come home with it" — get that backwards and the last hour is misery.
+ *      The scorer has supported headwind/tailwind all along; nothing ever fed it
+ *      a route direction.
+ * How: Score the outbound heading and its reverse, then recommend starting with
+ *      whichever leg is harder.
+ *
+ * @param {number} headingDeg - compass bearing of the outbound leg
+ * @returns {{out: object, back: object, advice: string}|null}
+ */
+export function scoreOutAndBack(weatherData, discipline = 'road', headingDeg, options = {}) {
+  const heading = num(headingDeg);
+  if (heading === null) return null;
+
+  const windFrom = num(weatherData?.current?.windDirection);
+  const outRelation = windRelationFor(heading, windFrom);
+  const backRelation = windRelationFor((heading + 180) % 360, windFrom);
+
+  const out = scoreCurrent(weatherData, discipline, { ...options, windRelation: outRelation });
+  const back = scoreCurrent(weatherData, discipline, { ...options, windRelation: backRelation });
+
+  let advice;
+  if (outRelation === backRelation) {
+    advice = outRelation === 'crosswind'
+      ? 'Crosswind both ways — direction barely matters today.'
+      : 'Wind is similar in both directions.';
+  } else if (Math.abs(out.score - back.score) < 0.05) {
+    // The legs differ on paper, but the wind is too light to change the score.
+    // Claiming the harder leg is first here would contradict the labels above it.
+    advice = 'Wind is light enough that either direction rides much the same.';
+  } else if (out.score < back.score) {
+    advice = 'Good call — the hard leg is first. Save the tailwind for the way home.';
+  } else {
+    advice = 'Consider riding the reverse first, so the tailwind is on the way home.';
+  }
+
+  return { out: { ...out, relation: outRelation }, back: { ...back, relation: backRelation }, advice };
 }
 
 /**
@@ -392,7 +606,8 @@ export function toConditions(record = {}) {
     precipitationMm: num(record.precipitation),
     visibilityKm: visibilityM === null ? null : visibilityM / 1000,
     uvIndex: num(record.uvIndex),
-    weatherCode: num(record.weatherCode)
+    weatherCode: num(record.weatherCode),
+    soilMoisture: num(record.soilMoisture)
   };
 }
 
@@ -448,12 +663,17 @@ export function scoreHourlySeries(weatherData, discipline = 'road', options = {}
     })
     .map(h => {
       const at = new Date(h.time);
-      const recentRainMm = profile.mudWindowH
+      // The rainfall fallback is O(n) per hour, so only pay for it when the
+      // model did not give us soil moisture for this hour.
+      const needsRainFallback = profile.mudWindowH > 0 && num(h.soilMoisture) === null;
+      const recentRainMm = needsRainFallback
         ? recentPrecipSum(hourly, profile.mudWindowH, at)
         : null;
       const result = scoreConditions(toConditions(h), {
         discipline,
         windRelation: options.windRelation || 'crosswind',
+        comfortBand: options.comfortBand,
+        ridingSpeedKmh: options.ridingSpeedKmh,
         recentRainMm
       });
       return { ...result, time: h.time, date: at, hour: h };

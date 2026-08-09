@@ -25,7 +25,8 @@ import {
 } from './location.js';
 import {
   DISCIPLINES, scoreCurrent, scoreHourlySeries, findBestWindow, findRainTiming,
-  generateSafetyAlerts, generateRecommendations, scoreTier
+  generateSafetyAlerts, generateRecommendations, scoreTier, scoreOutAndBack,
+  comfortBand, DEFAULT_COMFORT_BAND
 } from './insights.js';
 import {
   formatTemp, formatSpeed, formatVisibility, formatPercent, formatPrecip,
@@ -40,6 +41,10 @@ const state = {
   unitSystem: 'metric',   // 'metric' | 'imperial'
   theme: 'light',         // 'dark' | 'light' — the theme currently showing
   themeSource: 'system',  // 'system' | 'user' — whether the rider chose it
+  rideHours: 2,           // how long the rider wants to be out
+  routeBearing: null,     // compass bearing of the outbound leg, or null
+  comfortBand: null,      // rider-calibrated [minC, maxC], or null for the default
+  ridingSpeedKmh: null,   // rider-calibrated, or null for the discipline default
   loading: false,
   error: null
 };
@@ -48,6 +53,18 @@ const UNITS_KEY = 'w4b:units';
 const ACTIVITY_KEY = 'w4b:activity';
 // Also read by the pre-paint inline script in index.html — keep both in sync.
 const THEME_KEY = 'w4b:theme';
+const RIDE_HOURS_KEY = 'w4b:rideHours';
+const BEARING_KEY = 'w4b:routeBearing';
+const COMFORT_KEY = 'w4b:comfortBand';
+const SPEED_KEY = 'w4b:ridingSpeed';
+
+/** Scoring options derived from rider preferences, passed into every scorer call. */
+function scoringOptions() {
+  return {
+    comfortBand: state.comfortBand || undefined,
+    ridingSpeedKmh: state.ridingSpeedKmh || undefined
+  };
+}
 
 // --- Colour tables. Full literal class strings so Tailwind keeps them. ------
 
@@ -115,7 +132,9 @@ function cacheElements() {
     'mobile-menu-btn', 'header-controls', 'help-button', 'help-modal', 'help-overlay',
     'help-close', 'help-close-2', 'units-c', 'units-f', 'scenic-section', 'scenic-image',
     'scenic-credit', 'daily-temp-chart',
-    'theme-toggle', 'theme-toggle-dark-icon', 'theme-toggle-light-icon'
+    'theme-toggle', 'theme-toggle-dark-icon', 'theme-toggle-light-icon',
+    'ride-duration', 'route-bearing', 'route-wind', 'compare-btn', 'compare-results',
+    'pref-temp-min', 'pref-temp-max', 'pref-speed', 'pref-reset', 'pref-hint'
   ];
   ids.forEach(id => { el[camel(id)] = document.getElementById(id); });
   el.activityButtons = ['activity-road', 'activity-gravel', 'activity-mtb']
@@ -127,7 +146,6 @@ function camel(id) {
   return id.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 }
 
-let dailyTempChart = null;
 let searchActiveIndex = -1;
 let searchOptions = [];
 let lastFocusedBeforeModal = null;
@@ -185,8 +203,27 @@ function loadPreferences() {
       state.theme = systemTheme();
       state.themeSource = 'system';
     }
+
+    const hours = Number(localStorage.getItem(RIDE_HOURS_KEY));
+    if (Number.isFinite(hours) && hours >= 1 && hours <= 6) state.rideHours = hours;
+
+    const bearing = localStorage.getItem(BEARING_KEY);
+    if (bearing !== null && bearing !== '') {
+      const b = Number(bearing);
+      if (Number.isFinite(b) && b >= 0 && b < 360) state.routeBearing = b;
+    }
+
+    const band = JSON.parse(localStorage.getItem(COMFORT_KEY) || 'null');
+    // comfortBand() rejects anything malformed and hands back the default.
+    if (Array.isArray(band)) {
+      const resolved = comfortBand(band);
+      state.comfortBand = resolved === DEFAULT_COMFORT_BAND ? null : resolved;
+    }
+
+    const speed = Number(localStorage.getItem(SPEED_KEY));
+    if (Number.isFinite(speed) && speed >= 5 && speed <= 60) state.ridingSpeedKmh = speed;
   } catch {
-    // Private mode — defaults are fine.
+    // Private mode or corrupt JSON — defaults are fine.
   }
 }
 
@@ -212,6 +249,9 @@ function bindUI() {
   bindRecents();
   bindUnits();
   bindTheme();
+  bindPlanner();
+  bindPreferences();
+  bindCompare();
   bindHelpModal();
 
   el.useGeolocation?.addEventListener('click', async () => {
@@ -279,7 +319,10 @@ function selectActivity(activity) {
   updateActivityTabsUI();
   renderInsights();
   renderBestWindow();
+  renderRouteWind();
   renderHourly();
+  // Default riding speed is per-discipline, so the calibration hint moves too.
+  updatePreferencesUI();
 }
 
 function updateActivityTabsUI() {
@@ -368,9 +411,8 @@ function updateThemeToggleUI() {
 function bindTheme() {
   el.themeToggle?.addEventListener('click', () => {
     applyTheme(state.theme === 'dark' ? 'light' : 'dark');
-    // The chart bakes its label colour from the computed body colour, so it has
-    // to be rebuilt or its axes keep the previous theme's contrast.
-    renderDailyTempChart();
+    // No re-render needed: the SVG chart inherits currentColor, unlike the
+    // Chart.js canvas it replaced, which baked its label colour in at build time.
     showToast(state.theme === 'dark' ? 'Dark mode' : 'Light mode', 1200);
   });
 
@@ -380,11 +422,167 @@ function bindTheme() {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
       if (state.themeSource !== 'system') return;
       applyTheme(e.matches ? 'dark' : 'light', { persist: false, source: 'system' });
-      renderDailyTempChart();
     });
   } catch {
     // Safari < 14 has no addEventListener on MediaQueryList; static default is fine.
   }
+}
+
+// --- Planner controls (ride length, route direction) ------------------------
+
+function bindPlanner() {
+  if (el.rideDuration) {
+    el.rideDuration.value = String(state.rideHours);
+    el.rideDuration.addEventListener('change', () => {
+      const hours = Number(el.rideDuration.value);
+      if (!Number.isFinite(hours)) return;
+      state.rideHours = hours;
+      savePreference(RIDE_HOURS_KEY, String(hours));
+      renderBestWindow();
+    });
+  }
+
+  if (el.routeBearing) {
+    el.routeBearing.value = state.routeBearing === null ? '' : String(state.routeBearing);
+    el.routeBearing.addEventListener('change', () => {
+      const raw = el.routeBearing.value;
+      state.routeBearing = raw === '' ? null : Number(raw);
+      savePreference(BEARING_KEY, raw);
+      renderRouteWind();
+    });
+  }
+}
+
+// --- Rider calibration ------------------------------------------------------
+
+function bindPreferences() {
+  const commitBand = () => {
+    const sys = state.unitSystem;
+    // The inputs are in the rider's own unit; the scorer works in Celsius.
+    const lo = toCelsius(Number(el.prefTempMin.value), sys);
+    const hi = toCelsius(Number(el.prefTempMax.value), sys);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo >= hi) {
+      updatePreferencesUI('Enter a range with the lower number first.');
+      return;
+    }
+    state.comfortBand = comfortBand([lo, hi]);
+    savePreference(COMFORT_KEY, JSON.stringify(state.comfortBand));
+    updatePreferencesUI();
+    renderAll();
+  };
+
+  el.prefTempMin?.addEventListener('change', commitBand);
+  el.prefTempMax?.addEventListener('change', commitBand);
+
+  el.prefSpeed?.addEventListener('change', () => {
+    const shown = Number(el.prefSpeed.value);
+    // Stored in km/h regardless of what the rider is shown.
+    const kmh = state.unitSystem === 'imperial' ? shown / 0.621371 : shown;
+    state.ridingSpeedKmh = Number.isFinite(kmh) && kmh >= 5 && kmh <= 60 ? Math.round(kmh) : null;
+    if (state.ridingSpeedKmh) savePreference(SPEED_KEY, String(state.ridingSpeedKmh));
+    updatePreferencesUI();
+    renderAll();
+  });
+
+  el.prefReset?.addEventListener('click', () => {
+    state.comfortBand = null;
+    state.ridingSpeedKmh = null;
+    try {
+      localStorage.removeItem(COMFORT_KEY);
+      localStorage.removeItem(SPEED_KEY);
+    } catch { /* ignore */ }
+    updatePreferencesUI();
+    renderAll();
+  });
+
+  updatePreferencesUI();
+}
+
+function toCelsius(value, systemKey) {
+  if (!Number.isFinite(value)) return NaN;
+  return systemKey === 'imperial' ? (value - 32) * 5 / 9 : value;
+}
+
+/** Reflect stored preferences into the inputs, in the rider's current units. */
+function updatePreferencesUI(message) {
+  const sys = state.unitSystem;
+  const band = state.comfortBand || DEFAULT_COMFORT_BAND;
+  const speed = state.ridingSpeedKmh || DISCIPLINES[state.activity].ridingSpeedKmh;
+
+  if (el.prefTempMin) el.prefTempMin.value = String(Math.round(convertTemp(band[0], sys)));
+  if (el.prefTempMax) el.prefTempMax.value = String(Math.round(convertTemp(band[1], sys)));
+  if (el.prefSpeed) {
+    el.prefSpeed.value = String(Math.round(sys === 'imperial' ? speed * 0.621371 : speed));
+  }
+
+  if (el.prefHint) {
+    const unit = systemFor(sys);
+    el.prefHint.textContent = message || (
+      state.comfortBand || state.ridingSpeedKmh
+        ? `Using your settings. Speed in ${unit.speed}, temperature in ${unit.temp}.`
+        : `Using defaults for ${DISCIPLINES[state.activity].label}. Speed in ${unit.speed}, temperature in ${unit.temp}.`
+    );
+  }
+}
+
+// --- Compare locations ------------------------------------------------------
+
+function bindCompare() {
+  el.compareBtn?.addEventListener('click', () => runComparison());
+}
+
+/**
+ * Goal: Answer "is it better an hour up the road?".
+ * Why: Riders who travel to ride already have their spots saved; scoring them
+ *      side by side turns the recents list into a decision tool.
+ * How: Fetch each recent location (served from cache when warm) and score it
+ *      for the selected discipline. Failures are reported per row, never fatal.
+ */
+async function runComparison() {
+  if (!el.compareResults) return;
+  const others = getRecentLocations()
+    .filter(r => !state.location || `${r.latitude},${r.longitude}` !== `${state.location.latitude},${state.location.longitude}`)
+    .slice(0, 4);
+
+  if (!others.length) {
+    el.compareResults.innerHTML = '<p>No other saved locations yet. Search for a city or two, then come back.</p>';
+    return;
+  }
+
+  el.compareBtn.disabled = true;
+  el.compareResults.innerHTML = skeletonBlock('h-24');
+
+  const places = state.location ? [state.location, ...others] : others;
+  const rows = await Promise.all(places.map(async (place) => {
+    try {
+      const weather = await fetchWeatherData(place.latitude, place.longitude);
+      const result = scoreCurrent(weather, state.activity, scoringOptions());
+      return { place, result };
+    } catch (e) {
+      return { place, error: e };
+    }
+  }));
+
+  const scored = rows.filter(r => r.result).sort((a, b) => b.result.score - a.result.score);
+  const failed = rows.filter(r => r.error);
+
+  el.compareBtn.disabled = false;
+  el.compareResults.innerHTML = `
+    <ul class="space-y-2">
+      ${scored.map((row, i) => {
+        const t = tone(row.result.tier.tone);
+        const isCurrent = state.location && row.place.name === state.location.name;
+        return `<li class="flex items-center justify-between gap-3 rounded-lg border ${t.border} ${t.soft} px-3 py-2">
+          <div class="min-w-0">
+            <div class="font-medium truncate">${i === 0 ? '🏆 ' : ''}${escapeHtml(row.place.name)}${isCurrent ? ' <span class="text-xs text-gray-500 dark:text-gray-400">(current)</span>' : ''}</div>
+            <div class="text-xs text-gray-600 dark:text-gray-300 truncate">${escapeHtml(row.result.message)}</div>
+          </div>
+          <span class="shrink-0 inline-flex items-center gap-1 ${t.badge} px-2.5 py-1 rounded-full text-sm font-medium">${row.result.tier.emoji} ${row.result.score}/10</span>
+        </li>`;
+      }).join('')}
+      ${failed.map(row => `<li class="rounded-lg border ${TONE.gray.border} px-3 py-2 text-xs text-gray-500 dark:text-gray-400">${escapeHtml(row.place.name)}: forecast unavailable</li>`).join('')}
+    </ul>
+    <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">Scored for ${escapeHtml(DISCIPLINES[state.activity].label)}, current conditions.</p>`;
 }
 
 // --- Search combobox --------------------------------------------------------
@@ -683,6 +881,7 @@ function hideErrorBanner() {
 function renderAll() {
   renderCurrent();
   renderBestWindow();
+  renderRouteWind();
   renderInsights();
   renderHourly();
   renderDaily();
@@ -703,6 +902,7 @@ function renderSkeletons() {
       .map(() => skeletonBlock('h-[68px]')).join('');
   }
   if (el.bestWindow) el.bestWindow.innerHTML = skeletonBlock('h-20');
+  if (el.routeWind) el.routeWind.innerHTML = '';
   if (el.insights) el.insights.innerHTML = skeletonBlock('h-40');
   if (el.hourlyForecast) {
     el.hourlyForecast.innerHTML = Array.from({ length: 8 })
@@ -782,10 +982,19 @@ function sunLine() {
 function renderBestWindow() {
   if (!el.bestWindow || !state.weather) return;
 
-  const scored = scoreHourlySeries(state.weather, state.activity, { hours: 30 });
+  const hours = state.rideHours;
+  // Score the whole week so the same series answers both "today" and "this week".
+  const scored = scoreHourlySeries(state.weather, state.activity, { hours: 168, ...scoringOptions() });
   const daylight = getDaylightRanges(state.weather);
-  const best = findBestWindow(scored, { daylight: daylight.length ? daylight : null, withinHours: 24 });
+  const dl = daylight.length ? daylight : null;
+
+  const search = { daylight: dl, minHours: hours, maxHours: hours };
+  const best = findBestWindow(scored, { ...search, withinHours: 24 });
+  const week = findBestWindow(scored, { ...search, withinHours: 168 });
   const rain = findRainTiming(state.weather.hourly, { hours: 24 });
+
+  // Only worth showing the week separately if it beats today by a real margin.
+  const weekIsBetter = week && (!best || week.score >= best.score + 0.5);
 
   const rainLine = (() => {
     if (!rain) return '';
@@ -799,18 +1008,32 @@ function renderBestWindow() {
       : '<span class="inline-flex items-center gap-1">🌤 Dry for the next 24 hours</span>';
   })();
 
+  const weekCard = weekIsBetter ? `
+    <div class="mt-3 rounded-lg border ${tone(week.tier.tone).border} ${tone(week.tier.tone).soft} p-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div class="text-sm text-gray-600 dark:text-gray-300">Better later this week</div>
+          <div class="text-lg font-semibold">${formatDayPrefix(week.start)}${formatClock(week.start)} – ${formatClock(week.end)}</div>
+        </div>
+        <span class="inline-flex items-center gap-2 ${tone(week.tier.tone).badge} px-3 py-1 rounded-full text-sm font-medium">
+          ${week.tier.emoji} ${week.score}/10 · ${escapeHtml(week.tier.label)}
+        </span>
+      </div>
+    </div>` : '';
+
   if (!best) {
     el.bestWindow.innerHTML = `
       <div class="rounded-lg border ${TONE.gray.border} ${TONE.gray.soft} p-4">
-        <div class="font-medium">No clear window in the next 24 hours of daylight.</div>
-        <div class="text-sm text-gray-600 dark:text-gray-300 mt-1">Check the 7-day outlook below, or plan an indoor session.</div>
+        <div class="font-medium">No ${hours}-hour window in the next 24 hours of daylight.</div>
+        <div class="text-sm text-gray-600 dark:text-gray-300 mt-1">${week ? 'There is one later in the week.' : 'Try a shorter ride, or plan an indoor session.'}</div>
         <div class="text-sm text-gray-600 dark:text-gray-300 mt-2">${rainLine}</div>
-      </div>`;
+      </div>
+      ${week ? weekCard : ''}`;
     return;
   }
 
   const t = tone(best.tier.tone);
-  const sparkline = renderSparkline(scored.slice(0, 24));
+  const sparkline = renderSparkline(scored.slice(0, 24), best);
 
   el.bestWindow.innerHTML = `
     <div class="rounded-lg border ${t.border} ${t.soft} p-4">
@@ -825,16 +1048,67 @@ function renderBestWindow() {
         </div>
       </div>
       ${sparkline}
+    </div>
+    ${weekCard}`;
+}
+
+// --- Route-aware wind -------------------------------------------------------
+
+/**
+ * Goal: Tell the rider which way to set off.
+ * Why: On a windy day this is the most actionable thing the app can say, and
+ *      the scorer has supported head/tailwind all along with nothing feeding it.
+ */
+function renderRouteWind() {
+  if (!el.routeWind) return;
+  if (state.routeBearing === null || !state.weather) {
+    el.routeWind.innerHTML = '';
+    return;
+  }
+
+  const legs = scoreOutAndBack(state.weather, state.activity, state.routeBearing, scoringOptions());
+  if (!legs) {
+    el.routeWind.innerHTML = '';
+    return;
+  }
+
+  const sys = state.unitSystem;
+  const c = state.weather.current;
+  const leg = (label, heading, result) => {
+    const t = tone(result.tier.tone);
+    return `<div class="flex-1 min-w-[140px] rounded-lg border ${t.border} ${t.soft} px-3 py-2">
+      <div class="text-xs text-gray-600 dark:text-gray-300">${label} · ${escapeHtml(degToCardinal(heading))}</div>
+      <div class="flex items-center justify-between gap-2 mt-0.5">
+        <span class="font-semibold capitalize">${escapeHtml(result.relation)}</span>
+        <span class="inline-flex items-center gap-1 ${t.badge} px-2 py-0.5 rounded-full text-sm font-medium">${result.score}/10</span>
+      </div>
+    </div>`;
+  };
+
+  el.routeWind.innerHTML = `
+    <div class="rounded-lg border ${TONE.gray.border} p-3">
+      <div class="text-sm font-medium mb-2">Route wind — ${formatSpeed(c.windSpeed, sys)} from ${escapeHtml(degToCardinal(c.windDirection))}</div>
+      <div class="flex flex-wrap gap-2">
+        ${leg('Out', state.routeBearing, legs.out)}
+        ${leg('Back', (state.routeBearing + 180) % 360, legs.back)}
+      </div>
+      <div class="text-sm text-gray-600 dark:text-gray-300 mt-2">${escapeHtml(legs.advice)}</div>
     </div>`;
 }
 
 /** A 24-bar strip: height and colour both encode the hourly rideability score. */
-function renderSparkline(scoredHours) {
+function renderSparkline(scoredHours, highlight = null) {
   if (!scoredHours.length) return '';
+  const from = highlight ? highlight.start.getTime() : null;
+  const to = highlight ? highlight.end.getTime() : null;
+
   const bars = scoredHours.map(h => {
     const t = tone(h.tier.tone);
     const height = Math.max(8, Math.round((h.score / 10) * 40));
-    return `<div class="flex-1 flex flex-col justify-end items-center gap-1" title="${escapeAttr(`${formatClock(h.date)} · ${h.score}/10 ${h.tier.label}`)}">
+    // Mark the hours the recommendation actually covers, so the headline and
+    // the strip visibly agree.
+    const inWindow = from !== null && h.date.getTime() >= from && h.date.getTime() < to;
+    return `<div class="flex-1 flex flex-col justify-end items-center gap-1${inWindow ? ' ring-2 ring-blue-500 rounded-sm' : ''}" title="${escapeAttr(`${formatClock(h.date)} · ${h.score}/10 ${h.tier.label}`)}">
       <div class="${t.bar} w-full rounded-sm" style="height:${height}px"></div>
     </div>`;
   }).join('');
@@ -863,7 +1137,7 @@ function renderInsights() {
     el.insightsCard.className = `rounded-lg shadow-lg p-4 backdrop-blur ${ACTIVITY_CARD_BG[state.activity]}`;
   }
 
-  const result = scoreCurrent(state.weather, state.activity);
+  const result = scoreCurrent(state.weather, state.activity, scoringOptions());
   const t = tone(result.tier.tone);
   const alerts = generateSafetyAlerts(state.weather);
   const recommendations = generateRecommendations(state.weather, state.activity);
@@ -915,8 +1189,10 @@ function renderInsights() {
           <ul class="text-sm mb-3 space-y-1">
             <li class="flex items-center gap-2">${icon('wind')}<span>Wind: ${formatSpeed(c.windSpeed, sys)} ${degToCardinal(c.windDirection)}${c.windGusts != null ? `, gusting ${formatSpeed(c.windGusts, sys)}` : ''}</span></li>
             <li class="flex items-center gap-2">${icon('temp')}<span>Feels like: ${formatTemp(c.apparentTemperature ?? c.temperature, sys)} (${comfort})</span></li>
+            ${onBikeChillRow(result)}
             <li class="flex items-center gap-2">${icon('humidity')}<span>Rain: ${formatPercent(c.precipitationProbability)} chance</span></li>
             <li class="flex items-center gap-2">${icon('visibility')}<span>Visibility: ${formatVisibility(c.visibility, sys)}</span></li>
+            ${surfaceRow(result)}
           </ul>
 
           <div class="text-sm font-medium mb-1">Recommendations</div>
@@ -957,12 +1233,31 @@ function renderInsights() {
   wireIconFallbacks(el.insights);
 }
 
+/**
+ * Show the on-bike wind chill only when it differs meaningfully from the
+ * ambient feels-like. On a mild day the two agree and the extra row is noise.
+ */
+function onBikeChillRow(result) {
+  const chill = result.ridingFeelsLikeC;
+  const ambient = state.weather?.current?.apparentTemperature ?? state.weather?.current?.temperature;
+  if (chill == null || ambient == null || Math.abs(chill - Number(ambient)) < 2) return '';
+  const speed = state.ridingSpeedKmh || DISCIPLINES[state.activity].ridingSpeedKmh;
+  return `<li class="flex items-center gap-2">${icon('thermo')}<span>On the bike at ${formatSpeed(speed, state.unitSystem)}: <strong>${formatTemp(chill, state.unitSystem)}</strong></span></li>`;
+}
+
+/** Surface state for gravel/MTB, with a note when it came from the weaker signal. */
+function surfaceRow(result) {
+  if (!result.surface) return '';
+  const note = result.surface.source === 'rainfall' ? ' (estimated from rainfall)' : '';
+  return `<li class="flex items-center gap-2">${icon('flag')}<span>Surface: ${escapeHtml(result.surface.label)}${note}</span></li>`;
+}
+
 // --- Hourly -----------------------------------------------------------------
 
 function renderHourly() {
   if (!el.hourlyForecast || !state.weather) return;
   const sys = state.unitSystem;
-  const scored = scoreHourlySeries(state.weather, state.activity, { hours: 24 }).slice(0, 24);
+  const scored = scoreHourlySeries(state.weather, state.activity, { hours: 24, ...scoringOptions() }).slice(0, 24);
 
   const source = scored.length
     ? scored
@@ -1012,73 +1307,106 @@ function renderDaily() {
   }).join('');
 }
 
+/**
+ * Goal: Plot the 7-day high/low as inline SVG.
+ * Why: This replaced ~200 KB of Chart.js plus a datalabels plugin, pulled from a
+ *      CDN, for one line chart — in an app that already draws its own sparkline.
+ *      Inline SVG also inherits `currentColor`, so it just works in both themes
+ *      with no re-render on toggle and no external requests to allow in a CSP.
+ * How: Map temperatures to a fixed viewBox and let CSS scale it. Colours come
+ *      from Tailwind text utilities on the wrapping groups.
+ */
 function renderDailyTempChart() {
-  const canvas = el.dailyTempChart;
-  if (!canvas || !state.weather || !Array.isArray(state.weather.daily)) return;
-  if (typeof window.Chart === 'undefined') return;
-
-  if (window.ChartDataLabels && !window.__chartDatalabelsRegistered) {
-    try { window.Chart.register(window.ChartDataLabels); window.__chartDatalabelsRegistered = true; } catch { /* optional plugin */ }
-  }
+  const host = el.dailyTempChart;
+  if (!host || !state.weather || !Array.isArray(state.weather.daily)) return;
 
   const sys = state.unitSystem;
-  const unitSymbol = systemFor(sys).temp;
-  const labels = state.weather.daily.map(d => formatDay(d.date));
-  const toDisplay = v => {
-    const converted = convertTemp(v, sys);
-    return converted === null ? null : Math.round(converted);
-  };
-  const textColor = getComputedStyle(document.body).color || '#111827';
+  const unit = systemFor(sys).temp;
+  const days = state.weather.daily;
+  const highs = days.map(d => convertTemp(d.temperatureMax, sys));
+  const lows = days.map(d => convertTemp(d.temperatureMin, sys));
 
-  if (dailyTempChart) {
-    dailyTempChart.destroy();
-    dailyTempChart = null;
+  const usable = highs.filter(v => v !== null).length;
+  if (usable < 2) {
+    host.innerHTML = '';
+    return;
   }
 
-  dailyTempChart = new window.Chart(canvas.getContext('2d'), {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: `Max (${unitSymbol})`,
-          data: state.weather.daily.map(d => toDisplay(d.temperatureMax)),
-          borderColor: 'rgb(239, 68, 68)',
-          backgroundColor: 'rgba(239, 68, 68, 0.2)',
-          pointRadius: 3, pointHoverRadius: 4, borderWidth: 3, tension: 0.3, spanGaps: true
-        },
-        {
-          label: `Min (${unitSymbol})`,
-          data: state.weather.daily.map(d => toDisplay(d.temperatureMin)),
-          borderColor: 'rgb(59, 130, 246)',
-          backgroundColor: 'rgba(59, 130, 246, 0.2)',
-          pointRadius: 3, pointHoverRadius: 4, borderWidth: 3, tension: 0.3, spanGaps: true
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      layout: { padding: { top: 12, right: 8, left: 8, bottom: 8 } },
-      plugins: {
-        legend: { display: true, position: 'top', labels: { color: textColor } },
-        tooltip: {
-          callbacks: {
-            label: ctx => (ctx.parsed.y == null ? '' : `${ctx.dataset.label}: ${ctx.parsed.y}${unitSymbol}`)
-          }
-        },
-        datalabels: window.ChartDataLabels ? {
-          color: textColor, clamp: true, anchor: 'end', align: 'top', offset: 2, padding: 2,
-          font: { weight: '600', size: 10 },
-          formatter: v => (v == null ? '' : `${v}${unitSymbol}`)
-        } : undefined
-      },
-      scales: {
-        y: { ticks: { callback: v => `${v}${unitSymbol}`, color: textColor }, grid: { color: 'rgba(107,114,128,0.2)' } },
-        x: { ticks: { color: textColor }, grid: { display: false } }
-      }
-    }
-  });
+  // Geometry in viewBox units; the SVG scales to whatever width it is given.
+  const W = 720;
+  const H = 240;
+  const padX = 34;
+  const padTop = 26;
+  const padBottom = 34;
+
+  const values = [...highs, ...lows].filter(v => v !== null);
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (max - min < 4) { const mid = (max + min) / 2; min = mid - 2; max = mid + 2; }
+  const pad = (max - min) * 0.15;
+  min -= pad;
+  max += pad;
+
+  const x = i => padX + (i * (W - padX * 2)) / Math.max(1, days.length - 1);
+  const y = v => padTop + ((max - v) / (max - min)) * (H - padTop - padBottom);
+
+  const path = series => series
+    .map((v, i) => (v === null ? null : `${i === 0 || series[i - 1] === null ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`))
+    .filter(Boolean)
+    .join(' ');
+
+  const dots = (series, cls) => series
+    .map((v, i) => (v === null ? '' : `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3.5" class="${cls}" />`))
+    .join('');
+
+  const labels = (series, cls, dy) => series
+    .map((v, i) => (v === null ? '' :
+      `<text x="${x(i).toFixed(1)}" y="${(y(v) + dy).toFixed(1)}" text-anchor="middle" class="${cls}" font-size="12" font-weight="600">${Math.round(v)}°</text>`))
+    .join('');
+
+  // Three horizontal guides, labelled.
+  const gridLines = [0, 0.5, 1].map(f => {
+    const value = max - f * (max - min);
+    const gy = padTop + f * (H - padTop - padBottom);
+    return `<line x1="${padX}" y1="${gy.toFixed(1)}" x2="${W - padX}" y2="${gy.toFixed(1)}" stroke="currentColor" stroke-opacity="0.15" stroke-width="1" />
+      <text x="${padX - 6}" y="${(gy + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="currentColor" fill-opacity="0.55">${Math.round(value)}°</text>`;
+  }).join('');
+
+  const dayLabels = days
+    .map((d, i) => `<text x="${x(i).toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="12" fill="currentColor" fill-opacity="0.7">${escapeHtml(formatDay(d.date))}</text>`)
+    .join('');
+
+  host.innerHTML = `
+    <figure class="text-gray-900 dark:text-gray-100">
+      <figcaption class="flex items-center gap-4 text-xs text-gray-600 dark:text-gray-300 mb-1">
+        <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-0.5 bg-red-500"></span>High (${unit})</span>
+        <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-0.5 bg-blue-500"></span>Low (${unit})</span>
+      </figcaption>
+      <svg viewBox="0 0 ${W} ${H}" class="w-full h-auto" role="img"
+           aria-label="${escapeAttr(dailyChartSummary(days, highs, lows, unit))}">
+        ${gridLines}
+        ${dayLabels}
+        <g class="text-red-500">
+          <path d="${path(highs)}" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
+          ${dots(highs, 'fill-red-500')}
+          ${labels(highs, 'fill-red-600 dark:fill-red-300', -10)}
+        </g>
+        <g class="text-blue-500">
+          <path d="${path(lows)}" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
+          ${dots(lows, 'fill-blue-500')}
+          ${labels(lows, 'fill-blue-600 dark:fill-blue-300', 18)}
+        </g>
+      </svg>
+    </figure>`;
+}
+
+/** Screen-reader description of the chart, which is otherwise pure geometry. */
+function dailyChartSummary(days, highs, lows, unit) {
+  const parts = days.map((d, i) => {
+    if (highs[i] === null || lows[i] === null) return null;
+    return `${formatDay(d.date)} ${Math.round(highs[i])} to ${Math.round(lows[i])}${unit}`;
+  }).filter(Boolean);
+  return `Daily high and low temperatures: ${parts.join('; ')}.`;
 }
 
 // ---------------------------------------------------------------------------
