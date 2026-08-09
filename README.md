@@ -14,7 +14,7 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 - Geolocation first, city search fallback, recent locations
 - Full metric/imperial switching (°C·km/h·km ↔ °F·mph·mi), persisted
 - Installable PWA with offline support
-- Manual dark/light toggle, persisted, applied before first paint (no flash)
+- Follows your system theme by default; a header toggle overrides it and is remembered. Applied before first paint, so no flash
 - Mobile-first, keyboard accessible
 
 ## Run locally
@@ -41,7 +41,18 @@ npm install
 
 **Rebuild the CSS after changing markup or class names.** Tailwind purges anything it cannot see, and the compiled `styles/output.css` is committed on purpose — GitHub Pages serves this repo as-is with no build step.
 
-Tailwind runs in `darkMode: 'class'`, so the theme lives on `<html class="dark">` rather than following the OS. It is stored under `w4b:theme` and applied by a small **blocking** script in `<head>`: the app module is deferred, so applying it there would render one frame in the wrong theme. If you change `THEME_KEY` or `DEFAULT_THEME` in `js/app.js`, update that inline script to match.
+### Theming
+
+Tailwind runs in `darkMode: 'class'`, so the theme lives on `<html class="dark">`.
+
+There are two sources of truth, in priority order:
+
+1. **An explicit choice**, stored under `w4b:theme`. Written only when the rider clicks the toggle.
+2. **The OS setting**, via `prefers-color-scheme`. Used whenever nothing is stored — which is also the default for a first-time visitor. While in this mode the page tracks live OS changes, so flipping your system theme updates an already-open tab.
+
+The theme is applied by a small **blocking** script in `<head>`. It has to be blocking: `js/app.js` is a deferred module, so applying the theme there would render one frame in the wrong theme. If you change `THEME_KEY` or `systemTheme()` in `js/app.js`, update that inline script to match — it deliberately duplicates that logic.
+
+There is no "reset to system" control; clearing `w4b:theme` in devtools returns to following the OS.
 
 > Colour classes used at runtime (score tiers, activity tabs) are written as **complete literal strings** in the lookup tables at the top of `js/app.js`. Tailwind's scanner cannot see a class name assembled by concatenation, so never build one with string interpolation.
 
