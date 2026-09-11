@@ -10,12 +10,25 @@
   - App shell (HTML/CSS/JS/icons): cache-first, refreshed in the background.
   - Forecast API calls: network-first with a cache fallback, so you get fresh
     data when you can and yesterday's answer rather than an error when you can't.
+    "When you can't" includes a network that is merely too slow: after a short
+    deadline the saved copy answers, and the slow response still lands in the
+    cache for next time. Saved copies carry the time they were fetched, so the
+    page can say how old they are instead of passing them off as fresh.
   - Everything else (CDN scripts, photos): passes straight through.
 */
 
-const VERSION = 'a5ae11a6e83d';
+const VERSION = '703a20eb6a7c';
 const SHELL_CACHE = `w4b-shell-${VERSION}`;
-const DATA_CACHE = `w4b-data-${VERSION}`;
+// Deliberately not tied to VERSION: shipping new app code must not throw away
+// the rider's offline forecast. Bump by hand only if the saved shape changes.
+const DATA_CACHE = 'w4b-data-v1';
+
+// How long the network gets before a saved copy answers instead. Shorter than
+// the page's own request timeout (js/weather.js), so the saved copy wins.
+const NETWORK_DEADLINE_MS = 6000;
+
+// Written into saved copies; js/weather.js reads it. Keep the two in step.
+const FETCHED_AT_FIELD = 'w4bFetchedAt';
 
 const SHELL_ASSETS = [
   './',
@@ -26,6 +39,8 @@ const SHELL_ASSETS = [
   'js/insights.js',
   'js/location.js',
   'js/units.js',
+  'js/time.js',
+  'js/net.js',
   'manifest.json',
   'assets/icons/bike.svg',
   'assets/favicon_io/favicon-32x32.png',
@@ -71,7 +86,7 @@ self.addEventListener('fetch', event => {
   }
 
   if (API_HOSTS.includes(url.hostname)) {
-    event.respondWith(networkFirst(request));
+    event.respondWith(networkFirst(event));
     return;
   }
 
@@ -106,16 +121,56 @@ async function cacheFirst(request) {
   return new Response('Offline', { status: 503, statusText: 'Offline' });
 }
 
-/** Fresh data when the network allows; the last good response when it does not. */
-async function networkFirst(request) {
-  const cache = await caches.open(DATA_CACHE);
-  try {
-    const response = await fetch(request);
-    if (response && response.ok) cache.put(request, response.clone());
+const TIMED_OUT = Symbol('timed out');
+
+/**
+ * Fresh data when the network allows; the last good response when it does not.
+ *
+ * "Does not" used to mean only an outright failure — which on one bar of signal
+ * can take a minute to arrive. Now the network gets NETWORK_DEADLINE_MS, then a
+ * saved copy answers. With nothing saved, waiting is the only option left.
+ */
+async function networkFirst(event) {
+  const { request } = event;
+
+  // Start the request before any await, and keep the worker alive until it
+  // settles, so a response that loses the race still refreshes the cache.
+  const network = fetch(request).then(async response => {
+    if (response && response.ok) {
+      const copy = await stamped(response.clone());
+      if (copy) await (await caches.open(DATA_CACHE)).put(request, copy);
+    }
     return response;
-  } catch (e) {
-    const cached = await cache.match(request);
-    if (cached) return cached;
-    throw e;
+  });
+  event.waitUntil(network.catch(() => {}));
+
+  let deadline;
+  const timeout = new Promise(resolve => { deadline = setTimeout(resolve, NETWORK_DEADLINE_MS, TIMED_OUT); });
+
+  try {
+    const first = await Promise.race([network, timeout]);
+    if (first !== TIMED_OUT) return first;
+  } catch {
+    // Failed outright; fall through to the saved copy.
+  } finally {
+    clearTimeout(deadline);
+  }
+
+  const cached = await (await caches.open(DATA_CACHE)).match(request);
+  if (cached) return cached;
+  return network; // nothing saved — keep waiting (and reject if it fails)
+}
+
+/** A copy of a JSON response, tagged with when it was fetched. */
+async function stamped(response) {
+  try {
+    const data = await response.json();
+    data[FETCHED_AT_FIELD] = Date.now();
+    return new Response(JSON.stringify(data), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch {
+    return null; // not JSON — not worth saving
   }
 }

@@ -31,6 +31,8 @@ const HASHED_FILES = [
   'js/insights.js',
   'js/location.js',
   'js/units.js',
+  'js/time.js',
+  'js/net.js',
   'manifest.json'
 ];
 
