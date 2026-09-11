@@ -14,7 +14,12 @@
   - Cache responses in sessionStorage with a short TTL so a reload or a units
     toggle does not re-hit the network.
   - Air quality is fetched best-effort and never blocks the forecast.
+  - Times are requested as Unix timestamps, so every time in the parsed result
+    is an exact instant. See js/time.js for why that matters.
 */
+
+import { unixToIso, localDateKey } from './time.js';
+import { fetchWithTimeout } from './net.js';
 
 const DEBUG = (() => {
   try {
@@ -88,9 +93,22 @@ const DAILY_PARAMS = [
 
 // Bump when the requested variable set changes, so cached responses from an
 // older shape are not reused without the new fields.
-const CACHE_PREFIX = 'w4b:cache:v3:';
+// v4: times became Unix timestamps.
+const CACHE_PREFIX = 'w4b:cache:v4:';
 const FORECAST_TTL_MS = 10 * 60 * 1000;
 const AIR_TTL_MS = 30 * 60 * 1000;
+
+// Longer than the service worker's cache-fallback deadline (sw.js), so with a
+// saved copy the worker answers first; without one, this is when we give up
+// and show the retry banner instead of skeletons forever.
+const REQUEST_TIMEOUT_MS = 15000;
+
+// Set by sw.js on the copies it saves. Its presence means this response came
+// from the offline fallback, and its value is when the data really left the API.
+const SW_STAMP = 'w4bFetchedAt';
+
+/** The API refused the request itself (HTTP 400) — e.g. an unsupported variable. */
+class ApiRejection extends Error {}
 
 function cacheKey(kind, latitude, longitude) {
   // ~100 m precision is far finer than a weather model cell, and keeps the key stable
@@ -108,15 +126,22 @@ function readCache(key, ttlMs) {
       sessionStorage.removeItem(key);
       return null;
     }
-    return entry.data;
+    return entry;
   } catch {
     return null;
   }
 }
 
+/** When the data left the API: the worker's stamp if it was a saved copy. */
+function fetchedAtOf(data) {
+  return typeof data?.[SW_STAMP] === 'number' ? data[SW_STAMP] : Date.now();
+}
+
 function writeCache(key, data) {
   try {
-    sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), data }));
+    // Keyed on the data's real age, so an offline copy cannot become "fresh"
+    // just by passing through this cache.
+    sessionStorage.setItem(key, JSON.stringify({ at: fetchedAtOf(data), data }));
   } catch {
     // Quota or private mode — caching is an optimisation, not a requirement.
   }
@@ -143,12 +168,16 @@ export function clearWeatherCache() {
 /**
  * Goal: Fetch a 7‑day forecast for coordinates and return a normalized object.
  * Why: The UI expects consistent shapes and derived text across views.
- * How: Serve from cache when fresh, otherwise try the full hourly variable set
- *      and fall back to a reduced one, then parse and format.
+ * How: Serve from cache when fresh, otherwise try the full hourly variable set.
+ *      Only an HTTP 400 — the API rejecting a variable — is worth retrying with
+ *      the reduced set. A timeout or network failure is not: the smaller
+ *      request would fail the same way, after making the rider wait twice.
  *
  * @param {number} latitude
  * @param {number} longitude
- * @param {{force?: boolean}} options - `force` bypasses the cache.
+ * @param {{force?: boolean, signal?: AbortSignal, fetchImpl?: Function}} options
+ *        `force` bypasses the cache; `signal` cancels a superseded request.
+ * @returns the formatted forecast, plus `fetchedAt` (ms) and `offline`.
  */
 export async function fetchWeatherData(latitude, longitude, options = {}) {
   const key = cacheKey('forecast', latitude, longitude);
@@ -157,32 +186,43 @@ export async function fetchWeatherData(latitude, longitude, options = {}) {
     if (cached) {
       log.info('[weather] cache hit', key);
       // Re-parse so "nearest hour" and the daily filter track the current clock.
-      return formatWeatherData(parseWeatherResponse(cached));
+      return withProvenance(formatWeatherData(parseWeatherResponse(cached.data)), cached.data);
     }
   }
 
   const buildUrl = hourly =>
     `${FORECAST_URL}?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}` +
-    `&hourly=${hourly}&daily=${DAILY_PARAMS}&timezone=auto&forecast_days=7&past_days=3`;
+    `&hourly=${hourly}&daily=${DAILY_PARAMS}&timezone=auto&timeformat=unixtime&forecast_days=7&past_days=3`;
 
   let lastError;
   for (const hourly of [HOURLY_PARAMS, HOURLY_PARAMS_FALLBACK]) {
     try {
       log.info('[weather] requesting hourly set', hourly);
-      const response = await fetch(buildUrl(hourly));
+      const response = await fetchWithTimeout(buildUrl(hourly), {
+        timeoutMs: REQUEST_TIMEOUT_MS,
+        signal: options.signal,
+        fetchImpl: options.fetchImpl
+      });
       if (!response.ok) {
         const body = await safeReadText(response);
-        throw new Error(`Weather API error ${response.status}: ${body}`);
+        const message = `Weather API error ${response.status}: ${body}`;
+        throw response.status === 400 ? new ApiRejection(message) : new Error(message);
       }
       const data = await response.json();
       writeCache(key, data);
-      return formatWeatherData(parseWeatherResponse(data));
+      return withProvenance(formatWeatherData(parseWeatherResponse(data)), data);
     } catch (e) {
-      log.warn('[weather] hourly set failed, trying next', e);
+      if (!(e instanceof ApiRejection)) throw e;
+      log.warn('[weather] API rejected the hourly set, trying the reduced one', e);
       lastError = e;
     }
   }
-  throw lastError || new Error('Weather API error');
+  throw lastError;
+}
+
+/** Attach when the data was fetched, and whether it is an offline copy. */
+function withProvenance(weather, data) {
+  return { ...weather, fetchedAt: fetchedAtOf(data), offline: typeof data?.[SW_STAMP] === 'number' };
 }
 
 /**
@@ -195,14 +235,18 @@ export async function fetchAirQuality(latitude, longitude, options = {}) {
   const key = cacheKey('air', latitude, longitude);
   if (!options.force) {
     const cached = readCache(key, AIR_TTL_MS);
-    if (cached) return parseAirQuality(cached);
+    if (cached) return parseAirQuality(cached.data);
   }
 
   try {
     const url =
       `${AIR_QUALITY_URL}?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}` +
-      `&hourly=pm2_5,pm10,us_aqi,european_aqi&timezone=auto&forecast_days=1`;
-    const response = await fetch(url);
+      `&hourly=pm2_5,pm10,us_aqi,european_aqi&timezone=auto&timeformat=unixtime&forecast_days=1`;
+    const response = await fetchWithTimeout(url, {
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      signal: options.signal,
+      fetchImpl: options.fetchImpl
+    });
     if (!response.ok) throw new Error(`Air quality API error ${response.status}`);
     const data = await response.json();
     writeCache(key, data);
@@ -213,10 +257,11 @@ export async function fetchAirQuality(latitude, longitude, options = {}) {
   }
 }
 
-function parseAirQuality(data) {
-  const times = data?.hourly?.time || [];
+export function parseAirQuality(data, now = new Date()) {
+  const times = (data?.hourly?.time || []).map(unixToIso);
   if (!times.length) return null;
-  const idx = findNearestHourIndex(times, new Date());
+  const idx = findNearestHourIndex(times, now);
+  if (idx === -1) return null;
   const aqi = getSafe(data.hourly?.us_aqi, idx) ?? getSafe(data.hourly?.european_aqi, idx);
   if (aqi === null) return null;
   return {
@@ -246,12 +291,19 @@ export function aqiCategory(aqi) {
 /**
  * Goal: Transform raw Open‑Meteo JSON into structured current/hourly/daily arrays.
  * Why: Downstream code needs aligned indices and easy access to the nearest hour.
- * How: Locate the hour closest to now, assemble null-safe objects, and precompute
- *      `next24FromNearest` for the hourly view.
+ * How: Convert Unix timestamps to ISO instants, locate the hour closest to now,
+ *      assemble null-safe objects, and precompute `next24FromNearest`.
+ *
+ *      Daily `date` is the location's calendar date ("YYYY-MM-DD"): the API
+ *      stamps each day at local midnight, which is the previous day in UTC for
+ *      any place east of Greenwich, so it must be read in the location's zone.
+ *
+ * @param {object} data - raw Open-Meteo JSON, requested with timeformat=unixtime
+ * @param {Date} now - injectable for tests
  */
-export function parseWeatherResponse(data) {
-  const now = new Date();
-  const times = data.hourly?.time || [];
+export function parseWeatherResponse(data, now = new Date()) {
+  const timeZone = data.timezone || null;
+  const times = (data.hourly?.time || []).map(unixToIso);
   const nearestIndex = findNearestHourIndex(times, now);
 
   const hourly = times.map((iso, idx) => ({
@@ -278,8 +330,8 @@ export function parseWeatherResponse(data) {
 
   const current = hourly[nearestIndex] ? { ...hourly[nearestIndex] } : emptyCurrent();
 
-  const daily = (data.daily?.time || []).map((iso, idx) => ({
-    date: iso,
+  const daily = (data.daily?.time || []).map((seconds, idx) => ({
+    date: localDateKey(unixToIso(seconds), timeZone),
     temperatureMax: getSafe(data.daily?.temperature_2m_max, idx),
     temperatureMin: getSafe(data.daily?.temperature_2m_min, idx),
     apparentMax: getSafe(data.daily?.apparent_temperature_max, idx),
@@ -290,11 +342,11 @@ export function parseWeatherResponse(data) {
     windSpeedMax: getSafe(data.daily?.windspeed_10m_max, idx),
     windGustsMax: getSafe(data.daily?.windgusts_10m_max, idx),
     uvIndexMax: getSafe(data.daily?.uv_index_max, idx),
-    sunrise: getSafe(data.daily?.sunrise, idx),
-    sunset: getSafe(data.daily?.sunset, idx)
+    sunrise: unixToIso(getSafe(data.daily?.sunrise, idx)),
+    sunset: unixToIso(getSafe(data.daily?.sunset, idx))
   }));
 
-  const next24FromNearest = hourly.slice(nearestIndex, nearestIndex + 24);
+  const next24FromNearest = nearestIndex === -1 ? [] : hourly.slice(nearestIndex, nearestIndex + 24);
 
   return {
     current,
@@ -302,7 +354,7 @@ export function parseWeatherResponse(data) {
     daily,
     nearestIndex,
     next24FromNearest,
-    timezone: data.timezone || null
+    timezone: timeZone
   };
 }
 
@@ -330,12 +382,12 @@ function emptyCurrent() {
 /**
  * Goal: Add human text for weather codes and trim daily data to today onward.
  * Why: Readability, and the 7‑day view must not show days already gone.
- * How: Map codes to text everywhere, filter daily by local date, keep 7 entries.
- *      `past_days` data stays in `hourly` — the mud/surface factor needs it.
+ * How: Map codes to text everywhere, filter daily by the location's date, keep
+ *      7 entries. `past_days` data stays in `hourly` — the surface factor needs it.
  */
-export function formatWeatherData(raw) {
-  const now = new Date();
-  const todayStr = toLocalDateString(now);
+export function formatWeatherData(raw, now = new Date()) {
+  // "Today" at the location — not on the viewer's calendar.
+  const todayStr = localDateKey(now, raw.timezone);
 
   const next7Daily = Array.isArray(raw.daily)
     ? raw.daily.filter(d => String(d.date) >= todayStr).slice(0, 7)
@@ -351,13 +403,6 @@ export function formatWeatherData(raw) {
     daily: next7Daily.map(d => ({ ...d, weatherText: mapWeatherCodeToText(d.weatherCode) })),
     today: next7Daily[0] || null
   };
-}
-
-function toLocalDateString(date) {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const dd = String(date.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
 }
 
 /**
@@ -378,14 +423,20 @@ function getSafe(arr, idx) {
   return v === undefined ? null : v;
 }
 
+// Beyond this, "the nearest hour" is not "now" — it is the edge of an old
+// forecast that no longer covers the present.
+const MAX_NEAREST_DELTA_MS = 90 * 60 * 1000;
+
 /**
  * Goal: Find the index of the hourly time closest to `now`.
  * Why: Aligns "current" conditions with the nearest forecast hour.
+ * Returns -1 when no hour is within 90 minutes — e.g. an offline copy so old
+ * its forecast has run out — rather than presenting its last hour as current.
  */
 function findNearestHourIndex(times, now) {
-  if (!Array.isArray(times) || times.length === 0) return 0;
+  if (!Array.isArray(times) || times.length === 0) return -1;
   const nowMs = now.getTime();
-  let bestIdx = 0;
+  let bestIdx = -1;
   let bestDelta = Infinity;
   for (let i = 0; i < times.length; i++) {
     const delta = Math.abs(new Date(times[i]).getTime() - nowMs);
@@ -394,7 +445,7 @@ function findNearestHourIndex(times, now) {
       bestIdx = i;
     }
   }
-  return bestIdx;
+  return bestDelta <= MAX_NEAREST_DELTA_MS ? bestIdx : -1;
 }
 
 /**

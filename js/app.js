@@ -32,6 +32,12 @@ import {
   formatTemp, formatSpeed, formatVisibility, formatPercent, formatPrecip,
   degToCardinal, temperatureComfort, windDescriptor, convertTemp, systemFor
 } from './units.js';
+import { formatClock as clockAt, dayPrefix, formatWeekday, isNight, describeFreshness } from './time.js';
+import { createLatestGate, isAbort } from './net.js';
+
+// One gate per kind of request: only the newest may change the screen.
+const loadGate = createLatestGate();
+const searchGate = createLatestGate();
 
 const state = {
   activity: 'road',       // 'road' | 'gravel' | 'mtb'
@@ -166,23 +172,42 @@ document.addEventListener('DOMContentLoaded', async () => {
   registerServiceWorker();
   initScenicImage();
   renderSkeletons();
+  // The label is relative ("8 min ago"), so it has to keep counting.
+  setInterval(renderFreshness, 60000);
 
+  const untouched = loadGate.mark();
   try {
     const last = getLastLocation();
     if (last) {
       await loadWeather(last);
     } else {
-      setLocationIndicator('Locating…');
-      const { latitude, longitude, accuracy } = await getCurrentLocation();
-      const place = await safeReverse(latitude, longitude);
-      await loadWeather(place || { name: 'Current location', latitude, longitude, region: '', country: '', accuracy });
+      await loadCurrentPosition();
     }
   } catch {
-    setLocationIndicator('Using default location');
-    await loadWeather({ name: 'San Francisco', latitude: 37.7749, longitude: -122.4194, region: 'CA', country: 'USA' });
+    // Denied or timed out. A first-time visitor may have searched while the
+    // permission prompt was up — their choice beats our default.
+    if (untouched()) {
+      setLocationIndicator('Using default location');
+      await loadWeather({ name: 'San Francisco', latitude: 37.7749, longitude: -122.4194, region: 'CA', country: 'USA' });
+    }
   }
   renderRecentsDropdown();
 });
+
+/**
+ * Goal: Geolocate, then load the forecast there.
+ * Why: A position fix can take ten seconds. If the rider picks a place in the
+ *      meantime, arriving late must not drag them back.
+ * Throws if geolocation fails, so each caller can choose its own fallback.
+ */
+async function loadCurrentPosition() {
+  const untouched = loadGate.mark();
+  setLocationIndicator('Locating…');
+  const { latitude, longitude, accuracy } = await getCurrentLocation();
+  const place = await safeReverse(latitude, longitude);
+  if (!untouched()) return;
+  await loadWeather(place || { name: 'Current location', latitude, longitude, region: '', country: '', accuracy });
+}
 
 function loadPreferences() {
   try {
@@ -256,10 +281,7 @@ function bindUI() {
 
   el.useGeolocation?.addEventListener('click', async () => {
     try {
-      setLocationIndicator('Locating…');
-      const { latitude, longitude, accuracy } = await getCurrentLocation();
-      const place = await safeReverse(latitude, longitude);
-      await loadWeather(place || { name: 'Current location', latitude, longitude, region: '', country: '', accuracy });
+      await loadCurrentPosition();
     } catch {
       showToast('Could not access location. Please enable permissions.');
     }
@@ -268,8 +290,10 @@ function bindUI() {
   el.refreshBtn?.addEventListener('click', async () => {
     if (!state.location) return;
     clearWeatherCache();
-    await loadWeather(state.location, { force: true });
-    showToast('Forecast refreshed', 1500);
+    const outcome = await loadWeather(state.location, { force: true });
+    // Only claim a refresh that happened. On failure the error banner speaks.
+    if (outcome === 'fresh') showToast('Forecast refreshed', 1500);
+    else if (outcome === 'offline') showToast('Offline — showing the saved forecast', 2500);
   });
 
   el.errorRetry?.addEventListener('click', async () => {
@@ -659,6 +683,9 @@ function closeSearchResults() {
 }
 
 async function onSearchChanged() {
+  // Begin before the length check, so clearing the box also cancels a query in
+  // flight — otherwise its results could reopen the list after you emptied it.
+  const ticket = searchGate.begin();
   const q = el.citySearch.value.trim();
   if (q.length < 3) {
     searchOptions = [];
@@ -667,9 +694,13 @@ async function onSearchChanged() {
     return;
   }
   try {
-    searchOptions = await searchCities(q);
+    const results = await searchCities(q, { signal: ticket.signal });
+    // "Par" must not overwrite "Paris" just because it came back second.
+    if (!ticket.isCurrent()) return;
+    searchOptions = results;
     renderSearchResults(searchOptions);
   } catch {
+    if (!ticket.isCurrent()) return;
     searchOptions = [];
     closeSearchResults();
   }
@@ -699,6 +730,7 @@ function renderSearchResults(cities) {
 }
 
 async function chooseCity(city) {
+  searchGate.begin(); // a query still in flight must not reopen the list
   closeSearchResults();
   el.citySearch.value = city.name;
   await loadWeather(city);
@@ -817,8 +849,13 @@ function bindHelpModal() {
  * Why: Single entry point shared by search, recents, geolocation and refresh.
  * How: Show skeletons, fetch, persist the choice, render. On failure show an
  *      inline error with a retry action rather than leaving a blank page.
+ *      Every step after an await checks its ticket: if the rider has moved on,
+ *      a late answer is dropped — not rendered, not saved as their location.
+ *
+ * @returns {Promise<'fresh'|'offline'|'error'|'superseded'>}
  */
 async function loadWeather(location, options = {}) {
+  const ticket = loadGate.begin();
   state.location = location;
   state.loading = true;
   state.error = null;
@@ -827,8 +864,11 @@ async function loadWeather(location, options = {}) {
   renderSkeletons();
 
   try {
-    const weather = await fetchWeatherData(location.latitude, location.longitude, options);
+    const weather = await fetchWeatherData(location.latitude, location.longitude, { ...options, signal: ticket.signal });
+    if (!ticket.isCurrent()) return 'superseded';
     state.weather = weather;
+    // The previous place's AQI must not sit beside this place's forecast.
+    state.airQuality = null;
 
     saveRecentLocation({
       id: `${location.latitude},${location.longitude}`,
@@ -845,17 +885,21 @@ async function loadWeather(location, options = {}) {
     renderAll();
 
     // Air quality is a bonus: fetch after the main render so it never delays it.
-    fetchAirQuality(location.latitude, location.longitude, options).then(air => {
-      if (state.location !== location) return; // user moved on
+    fetchAirQuality(location.latitude, location.longitude, { ...options, signal: ticket.signal }).then(air => {
+      if (!ticket.isCurrent()) return;
       state.airQuality = air;
       if (state.weather) state.weather.airQuality = air;
       renderCurrent();
       renderInsights();
     });
+    return weather.offline ? 'offline' : 'fresh';
   } catch (e) {
+    // Superseded requests are aborted on purpose; that is not an error to show.
+    if (!ticket.isCurrent() || isAbort(e)) return 'superseded';
     state.loading = false;
     state.error = e;
     showErrorBanner(e);
+    return 'error';
   }
 }
 
@@ -939,9 +983,7 @@ function renderCurrent() {
     </div>
   `;
 
-  if (el.currentUpdated) {
-    el.currentUpdated.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  }
+  renderFreshness();
 
   const gustText = c.windGusts != null ? ` (gusts ${formatSpeed(c.windGusts, sys)})` : '';
   const air = state.airQuality;
@@ -965,6 +1007,17 @@ function renderCurrent() {
       <div class="text-lg font-semibold">${escapeHtml(it.value)}</div>
     </div>
   `).join('');
+}
+
+const FRESHNESS_OK = 'text-xs text-gray-500 dark:text-gray-400';
+const FRESHNESS_STALE = 'text-xs font-medium text-amber-700 dark:text-amber-300';
+
+/** How old the data really is — never the time the page happened to render. */
+function renderFreshness() {
+  if (!el.currentUpdated || !state.weather) return;
+  const { text, stale } = describeFreshness(state.weather.fetchedAt, Date.now(), { offline: state.weather.offline });
+  el.currentUpdated.textContent = text;
+  el.currentUpdated.className = stale ? FRESHNESS_STALE : FRESHNESS_OK;
 }
 
 function sunLine() {
@@ -1522,17 +1575,7 @@ function wireIconFallbacks(root) {
 }
 
 function isNightAt(date) {
-  const today = state.weather?.today;
-  if (!today?.sunrise || !today?.sunset) return false;
-  const t = date.getTime();
-  const sunrise = new Date(today.sunrise).getTime();
-  const sunset = new Date(today.sunset).getTime();
-  if (Number.isNaN(sunrise) || Number.isNaN(sunset)) return false;
-  // Compare clock position within the day so tomorrow's small hours count too.
-  const minutes = date.getHours() * 60 + date.getMinutes();
-  const riseMin = new Date(sunrise).getHours() * 60 + new Date(sunrise).getMinutes();
-  const setMin = new Date(sunset).getHours() * 60 + new Date(sunset).getMinutes();
-  return minutes < riseMin || minutes > setMin;
+  return isNight(date, getDaylightRanges(state.weather));
 }
 
 // ---------------------------------------------------------------------------
@@ -1609,28 +1652,23 @@ function escapeHtml(s) {
 
 const escapeAttr = escapeHtml;
 
+// Every time on the page is shown on the forecast location's clock, not the
+// viewer's. See js/time.js.
+function locationZone() {
+  return state.weather?.timezone;
+}
+
 function formatClock(value) {
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return clockAt(value, locationZone());
 }
 
 /** "Tomorrow " prefix when the window is not today, so 6:00 is never ambiguous. */
 function formatDayPrefix(date) {
-  const today = new Date();
-  if (date.toDateString() === today.toDateString()) return '';
-  const tomorrow = new Date(today.getTime() + 86400000);
-  if (date.toDateString() === tomorrow.toDateString()) return 'Tomorrow ';
-  return `${date.toLocaleDateString([], { weekday: 'short' })} `;
+  return dayPrefix(date, new Date(), locationZone());
 }
 
-function formatDay(iso) {
-  // Date-only strings must be built as local time, or they shift a day in UTC-negative zones.
-  if (typeof iso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(iso)) {
-    const [y, m, d] = iso.split('-').map(Number);
-    return new Date(y, m - 1, d).toLocaleDateString([], { weekday: 'short' });
-  }
-  return new Date(iso).toLocaleDateString([], { weekday: 'short' });
+function formatDay(dateKey) {
+  return formatWeekday(dateKey);
 }
 
 async function safeReverse(lat, lon) {

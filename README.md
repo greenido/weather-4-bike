@@ -18,7 +18,8 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 - Hourly strip colour-coded by rideability; 7-day outlook with a temperature chart
 - Geolocation first, city search fallback, recent locations
 - Full metric/imperial switching (°C·km/h·km ↔ °F·mph·mi), persisted
-- Installable PWA with offline support
+- Every time is shown on the forecast location's clock — check Tel Aviv from California and "now" is Tel Aviv's now
+- Installable PWA with offline support that works on a *bad* connection, not only a dead one, and says how old a saved forecast is
 - Follows your system theme by default; a header toggle overrides it and is remembered. Applied before first paint, so no flash
 - Mobile-first, keyboard accessible
 
@@ -67,13 +68,30 @@ There is no "reset to system" control; clearing `w4b:theme` in devtools returns 
 
 ### Tests
 
-The scoring engine is pure and dependency-free, so it is directly testable:
+Everything outside `app.js` is pure and dependency-free, so it is directly testable:
 
 ```bash
 npm test
 ```
 
-63 tests cover the penalty model, unknown-vs-zero handling, hard hazard ceilings, per-discipline weighting, the best-window search, rain timing, and unit conversion.
+161 tests cover the penalty model, unknown-vs-zero handling, hard hazard ceilings, per-discipline weighting, the best-window search, rain timing, unit conversion, time zones, request races and timeouts, and the service worker.
+
+- **Time-zone tests run under several process zones** (`inZone` in `test/helpers.js`). The time-zone bug only exists when the viewer's zone differs from the location's, and CI runs in UTC — a test that just runs "normally" passes while the app is wrong for everyone else.
+- **`sw.js` is tested as shipped.** It is a classic worker script, not a module, so `test/sw.test.js` runs the real file in a Node VM with fake `caches` and `fetch`.
+- **`app.js` is not unit-tested** — it is DOM glue. Its request-ordering logic lives in `createLatestGate` (`js/net.js`), which is.
+
+### Time
+
+Forecasts are requested with `timeformat=unixtime`, so every time in the app is an exact instant and all the arithmetic in `insights.js` needs no zone at all. The location's IANA zone is applied only when turning an instant into text, in `js/time.js`.
+
+Do not go back to the API's default ISO strings: they are location-local with no offset, so `new Date()` reads them in the *viewer's* zone. That made "now" in Tel Aviv, viewed from California, eleven hours stale. A daily date from the API is local midnight, which is the previous day in UTC east of Greenwich — read it with `localDateKey`, never `.slice(0, 10)`.
+
+### Requests
+
+- **Only the newest request may change the screen.** `loadWeather` and city search each take a ticket from a `createLatestGate`; starting a new request aborts the old one, and a late answer is dropped. Without this, tapping one city then another could show — and save as your location — whichever answered last.
+- **Everything has a deadline.** The service worker answers from its saved copy after 6 s; the page gives up after 15 s and shows the retry banner. The page's deadline must stay longer than the worker's, or the saved copy never gets its chance.
+- **Only an HTTP 400 is retried** with the reduced variable set. A timeout or network failure would fail the same way, after making the rider wait twice.
+- **Saved copies say how old they are.** The worker stamps `w4bFetchedAt` into each forecast it saves, and the page shows "Updated 8 min ago" or "Offline · forecast from 3 h ago" — never the time it happened to render.
 
 ## Architecture
 
@@ -90,14 +108,21 @@ js/
   location.js      # Geolocation, geocoding, recents
   insights.js      # Scoring, alerts, best-window search  (pure, no DOM)
   units.js         # Unit systems and all display formatting  (pure, no DOM)
+  time.js          # Location-zone formatting and data freshness  (pure, no DOM)
+  net.js           # Request deadlines and "latest request wins"  (pure, no DOM)
 test/
+  helpers.js       # inZone(), deferred()
   insights.test.js
   units.test.js
+  time.test.js
+  net.test.js
+  weather.test.js  # Parsing and fetch policy, against a Tel Aviv fixture
+  sw.test.js       # The real sw.js, in a VM
 assets/
   icons/weather2/static/   # Weather icon set
 ```
 
-`insights.js` and `units.js` have no DOM or storage dependencies — that is what makes them testable, and it is worth keeping that way.
+`insights.js`, `units.js`, `time.js` and `net.js` have no DOM or storage dependencies — that is what makes them testable, and it is worth keeping that way.
 
 ## Scoring
 
@@ -148,12 +173,12 @@ All keyless and CORS-enabled:
 - **Forecast** — `https://api.open-meteo.com/v1/forecast`
   Hourly: `temperature_2m, apparent_temperature, relativehumidity_2m, precipitation_probability, precipitation, weathercode, surface_pressure, cloudcover, visibility, windspeed_10m, winddirection_10m, windgusts_10m, uv_index`
   Daily: `weathercode, temperature_2m_max/min, apparent_temperature_max/min, precipitation_probability_max, precipitation_sum, windspeed_10m_max, windgusts_10m_max, uv_index_max, sunrise, sunset`
-  Requested with `past_days=3` — the mud/surface factor needs recent rainfall.
+  Requested with `past_days=3` — the mud/surface factor needs recent rainfall — and `timezone=auto&timeformat=unixtime` (see [Time](#time)).
 - **Air quality** — `https://air-quality-api.open-meteo.com/v1/air-quality` (best-effort; failure never blocks the forecast)
 - **Geocoding** — `https://geocoding-api.open-meteo.com/v1/search`
 - **Reverse geocoding** — BigDataCloud, no key required
 
-Responses are cached in `sessionStorage` (10 min for forecasts, 30 min for air quality). The refresh button bypasses the cache.
+Responses are cached in `sessionStorage` (10 min for forecasts, 30 min for air quality). The refresh button bypasses the cache. The service worker keeps the last good forecast per location in `w4b-data-v1`, which deliberately does not change name when the app is redeployed.
 
 Add `?debug=1` to the URL for verbose fetch logging.
 
