@@ -171,3 +171,50 @@ export function windDescriptor(kmh) {
   if (v <= 40) return 'strong winds';
   return 'very strong winds';
 }
+
+/** True when a formatted amount reads as something other than zero ("0.2 mm", not "0 mm" or '0.00"'). */
+const readsNonZero = text => /[1-9]/.test(text);
+
+/**
+ * Goal: One forecast hour's conditions, as display strings.
+ * Why: The ride chart's tooltip and its screen-reader text must say the same
+ *      thing, in the rider's units.
+ * How: Leave out what adds nothing, rather than show a row of dashes:
+ *      feels-like within 1° of the air, gusts no stronger than the wind,
+ *      and a rain amount that rounds to zero in the chosen units are `null`.
+ *      `windFrom` is where the wind blows *from* — the meteorological
+ *      convention, and the one the API reports.
+ */
+export function describeHourConditions(hour, systemKey) {
+  const temp = finite(hour?.temperature);
+  const feels = finite(hour?.apparentTemperature);
+  const wind = finite(hour?.windSpeed);
+  const gusts = finite(hour?.windGusts);
+  const rain = finite(hour?.precipitation);
+
+  const shownSpeed = kmh => Math.round(convertSpeed(kmh, systemKey));
+  const gustsAddSomething = gusts !== null && (wind === null || shownSpeed(gusts) > shownSpeed(wind));
+  const rainAmount = rain !== null && rain > 0 ? formatPrecip(rain, systemKey) : null;
+
+  return {
+    temp: formatTemp(temp, systemKey),
+    feelsLike: temp !== null && feels !== null && Math.abs(feels - temp) >= 1 ? formatTemp(feels, systemKey) : null,
+    wind: formatSpeed(wind, systemKey),
+    windFrom: finite(hour?.windDirection) === null ? null : degToCardinal(hour.windDirection),
+    gusts: gustsAddSomething ? formatSpeed(gusts, systemKey) : null,
+    rainChance: formatPercent(hour?.precipitationProbability),
+    rainAmount: rainAmount && readsNonZero(rainAmount) ? rainAmount : null
+  };
+}
+
+/** The same conditions as one sentence, for screen readers. */
+export function hourConditionsSentence(d) {
+  const temp = d.feelsLike ? `${d.temp}, feels like ${d.feelsLike}` : d.temp;
+  const wind = [
+    `Wind ${d.wind}`,
+    d.windFrom ? ` from ${d.windFrom}` : '',
+    d.gusts ? `, gusts ${d.gusts}` : ''
+  ].join('');
+  const rain = `Rain chance ${d.rainChance}${d.rainAmount ? `, ${d.rainAmount}` : ''}`;
+  return `${temp}. ${wind}. ${rain}.`;
+}

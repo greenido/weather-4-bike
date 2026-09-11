@@ -12,7 +12,8 @@ import assert from 'node:assert/strict';
 import {
   formatTemp, formatSpeed, formatVisibility, formatPercent, formatPrecip,
   degToCardinal, temperatureComfort, windDescriptor,
-  convertTemp, convertSpeed, convertDistance, systemFor, SYSTEMS
+  convertTemp, convertSpeed, convertDistance, systemFor, SYSTEMS,
+  describeHourConditions, hourConditionsSentence
 } from '../js/units.js';
 
 describe('temperatureComfort (regression: °F compared against °C values)', () => {
@@ -162,5 +163,77 @@ describe('system definitions', () => {
       assert.equal(s.comfortBand.length, 2);
       assert.ok(s.comfortBand[0] < s.comfortBand[1]);
     }
+  });
+});
+
+describe('describeHourConditions (ride chart tooltip)', () => {
+  const hour = {
+    temperature: 22.4,
+    apparentTemperature: 20.6,
+    windSpeed: 12,
+    windGusts: 20,
+    windDirection: 315,
+    precipitationProbability: 10,
+    precipitation: 0.2
+  };
+
+  test('metric: every field, in the rider’s units', () => {
+    assert.deepEqual(describeHourConditions(hour, 'metric'), {
+      temp: '22°C',
+      feelsLike: '21°C',
+      wind: '12 km/h',
+      windFrom: 'NW',
+      gusts: '20 km/h',
+      rainChance: '10%',
+      rainAmount: '0.2 mm'
+    });
+  });
+
+  test('imperial converts every number, not just the labels', () => {
+    const d = describeHourConditions(hour, 'imperial');
+    assert.equal(d.temp, '72°F');
+    assert.equal(d.feelsLike, '69°F');
+    assert.equal(d.wind, '7 mph');
+    assert.equal(d.gusts, '12 mph');
+    assert.equal(d.rainAmount, '0.01"');
+  });
+
+  test('feels-like is left out when it says nothing new', () => {
+    assert.equal(describeHourConditions({ ...hour, apparentTemperature: 22.9 }, 'metric').feelsLike, null);
+    assert.equal(describeHourConditions({ ...hour, apparentTemperature: null }, 'metric').feelsLike, null);
+  });
+
+  test('gusts are left out when they are no stronger than the wind, as displayed', () => {
+    assert.equal(describeHourConditions({ ...hour, windGusts: 12.3 }, 'metric').gusts, null);
+    assert.equal(describeHourConditions({ ...hour, windGusts: null }, 'metric').gusts, null);
+    // 12.4 vs 12.6 km/h: different readings, same displayed number.
+    assert.equal(describeHourConditions({ ...hour, windSpeed: 12.4, windGusts: 12.6 }, 'imperial').gusts, null);
+  });
+
+  test('a dry hour, or a trace that rounds to zero, shows no amount', () => {
+    assert.equal(describeHourConditions({ ...hour, precipitation: 0 }, 'metric').rainAmount, null);
+    assert.equal(describeHourConditions({ ...hour, precipitation: 0.02 }, 'metric').rainAmount, null, 'not "0 mm"');
+    assert.equal(describeHourConditions({ ...hour, precipitation: 0.1 }, 'imperial').rainAmount, null, 'not \'0.00"\'');
+  });
+
+  test('unknown stays unknown: dashes, never zeros', () => {
+    const d = describeHourConditions({}, 'metric');
+    assert.equal(d.temp, '—');
+    assert.equal(d.wind, '—');
+    assert.equal(d.rainChance, '—');
+    assert.equal(d.windFrom, null);
+    assert.equal(d.gusts, null);
+    assert.equal(d.rainAmount, null);
+  });
+
+  test('the sentence says what the tooltip shows', () => {
+    assert.equal(
+      hourConditionsSentence(describeHourConditions(hour, 'metric')),
+      '22°C, feels like 21°C. Wind 12 km/h from NW, gusts 20 km/h. Rain chance 10%, 0.2 mm.'
+    );
+    assert.equal(
+      hourConditionsSentence(describeHourConditions({ temperature: 15, windSpeed: 5, precipitationProbability: 0 }, 'metric')),
+      '15°C. Wind 5 km/h. Rain chance 0%.'
+    );
   });
 });

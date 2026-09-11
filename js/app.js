@@ -30,7 +30,8 @@ import {
 } from './insights.js';
 import {
   formatTemp, formatSpeed, formatVisibility, formatPercent, formatPrecip,
-  degToCardinal, temperatureComfort, windDescriptor, convertTemp, systemFor
+  degToCardinal, temperatureComfort, windDescriptor, convertTemp, systemFor,
+  describeHourConditions, hourConditionsSentence
 } from './units.js';
 import { formatClock as clockAt, dayPrefix, formatWeekday, isNight, describeFreshness } from './time.js';
 import { createLatestGate, isAbort } from './net.js';
@@ -1082,11 +1083,13 @@ function renderBestWindow() {
         <div class="text-sm text-gray-600 dark:text-gray-300 mt-2">${rainLine}</div>
       </div>
       ${week ? weekCard : ''}`;
+    rideChart = null;
     return;
   }
 
   const t = tone(best.tier.tone);
-  const sparkline = renderSparkline(scored.slice(0, 24), best);
+  const chartHours = scored.slice(0, 24);
+  const sparkline = renderSparkline(chartHours, best);
 
   el.bestWindow.innerHTML = `
     <div class="rounded-lg border ${t.border} ${t.soft} p-4">
@@ -1103,6 +1106,9 @@ function renderBestWindow() {
       ${sparkline}
     </div>
     ${weekCard}`;
+
+  // A keyboard user starts on the first hour of the recommended window.
+  wireRideChart(chartHours, chartHours.findIndex(h => h.date.getTime() === best.start.getTime()));
 }
 
 // --- Route-aware wind -------------------------------------------------------
@@ -1149,7 +1155,10 @@ function renderRouteWind() {
     </div>`;
 }
 
-/** A 24-bar strip: height and colour both encode the hourly rideability score. */
+/**
+ * A 24-bar strip: height and colour both encode the hourly rideability score.
+ * It is also a slider over the hours — see `wireRideChart` for the tooltip.
+ */
 function renderSparkline(scoredHours, highlight = null) {
   if (!scoredHours.length) return '';
   const from = highlight ? highlight.start.getTime() : null;
@@ -1161,8 +1170,9 @@ function renderSparkline(scoredHours, highlight = null) {
     // Mark the hours the recommendation actually covers, so the headline and
     // the strip visibly agree.
     const inWindow = from !== null && h.date.getTime() >= from && h.date.getTime() < to;
-    return `<div class="flex-1 flex flex-col justify-end items-center gap-1${inWindow ? ' ring-2 ring-blue-500 rounded-sm' : ''}" title="${escapeAttr(`${formatClock(h.date)} · ${h.score}/10 ${h.tier.label}`)}">
-      <div class="${t.bar} w-full rounded-sm" style="height:${height}px"></div>
+    // Full-height column, so the hovered hour can be highlighted behind its bar.
+    return `<div class="flex-1 h-full flex flex-col justify-end items-center rounded-sm">
+      <div class="${t.bar} w-full rounded-sm${inWindow ? ' ring-2 ring-blue-500' : ''}" style="height:${height}px"></div>
     </div>`;
   }).join('');
 
@@ -1171,12 +1181,164 @@ function renderSparkline(scoredHours, highlight = null) {
   const last = scoredHours[scoredHours.length - 1];
 
   return `
-    <div class="mt-3" aria-hidden="true">
-      <div class="flex items-end gap-[2px] h-[44px]">${bars}</div>
-      <div class="flex justify-between text-[11px] text-gray-500 dark:text-gray-400 mt-1">
+    <div class="relative mt-3" data-ride-chart>
+      <div role="slider" tabindex="0"
+           aria-label="Rideability by hour, next ${scoredHours.length} hours"
+           aria-valuemin="0" aria-valuemax="${scoredHours.length - 1}" aria-valuenow="0"
+           class="flex items-end gap-[2px] h-[44px] cursor-crosshair select-none touch-pan-y rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800">${bars}</div>
+      <div class="flex justify-between text-[11px] text-gray-500 dark:text-gray-400 mt-1" aria-hidden="true">
         <span>${formatClock(first.date)}</span><span>${formatClock(mid.date)}</span><span>${formatClock(last.date)}</span>
       </div>
+      <div data-ride-tip hidden aria-hidden="true" class="${RIDE_TIP}"></div>
     </div>`;
+}
+
+// --- Ride chart tooltip -----------------------------------------------------
+
+const RIDE_TIP = 'absolute bottom-full mb-2 z-20 w-max max-w-[16rem] pointer-events-none rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-xs leading-5 text-gray-800 dark:text-gray-100 shadow-lg';
+// A column behind the bar under the cursor, so you can see which hour you are on.
+const RIDE_BAR_ACTIVE = ['bg-gray-900/10', 'dark:bg-white/20'];
+
+// The chart currently on screen. Replaced on every render of the best window.
+let rideChart = null;
+
+/**
+ * Goal: Show one hour's conditions on the ride chart, however you point at it.
+ * Why: The bars say *how* rideable each hour is; the tooltip says what the
+ *      weather actually is then. A `title` attribute did neither on a phone.
+ * How: One pointer model for all inputs. A mouse hovers to preview; a tap or
+ *      click pins; a drag scrubs through the hours (pointer capture keeps it
+ *      tracking off the edge, and `touch-action: pan-y` leaves vertical
+ *      scrolling to the page). Arrow keys and Home/End move it too. Escape, or
+ *      pressing anywhere else, dismisses it.
+ *
+ * @param {object[]} scoredHours - the hours the chart was drawn from, in order
+ * @param {number} keyboardStart - index a keyboard user starts from
+ */
+function wireRideChart(scoredHours, keyboardStart = 0) {
+  const wrap = el.bestWindow?.querySelector('[data-ride-chart]');
+  if (!wrap) {
+    rideChart = null;
+    return;
+  }
+
+  const slider = wrap.querySelector('[role="slider"]');
+  const chart = {
+    wrap,
+    slider,
+    tip: wrap.querySelector('[data-ride-tip]'),
+    bars: [...slider.children],
+    hours: scoredHours,
+    index: Math.max(0, keyboardStart),
+    pinned: false,
+    dragging: false
+  };
+  rideChart = chart;
+  updateRideSlider(chart, chart.index);
+
+  const indexAt = clientX => {
+    const r = slider.getBoundingClientRect();
+    const i = Math.floor(((clientX - r.left) / r.width) * chart.bars.length);
+    return Math.min(chart.bars.length - 1, Math.max(0, i));
+  };
+
+  slider.addEventListener('pointerdown', e => {
+    chart.pinned = true;
+    chart.dragging = true;
+    showRideHour(chart, indexAt(e.clientX));
+    // Capture keeps a drag tracking past the chart's edge. It is a nicety:
+    // it throws for a pointer that is no longer active, and the tap must
+    // still have shown its hour.
+    try {
+      slider.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  });
+  slider.addEventListener('pointermove', e => {
+    // Mouse hover previews; any pointer that is pressed down scrubs.
+    if (chart.dragging || (e.pointerType === 'mouse' && !chart.pinned)) {
+      showRideHour(chart, indexAt(e.clientX));
+    }
+  });
+  const endDrag = () => { chart.dragging = false; };
+  slider.addEventListener('pointerup', endDrag);
+  // Fired when a touch turns into a vertical page scroll: stop scrubbing.
+  slider.addEventListener('pointercancel', endDrag);
+  slider.addEventListener('pointerleave', e => {
+    if (e.pointerType === 'mouse' && !chart.pinned) hideRideHour(chart);
+  });
+
+  slider.addEventListener('focus', () => {
+    // Keyboard focus shows where you are. Pointer focus has already shown it.
+    if (chart.tip.hidden) showRideHour(chart, chart.index);
+  });
+  slider.addEventListener('blur', () => hideRideHour(chart));
+  slider.addEventListener('keydown', e => {
+    const last = chart.bars.length - 1;
+    const moves = { ArrowRight: chart.index + 1, ArrowUp: chart.index + 1, ArrowLeft: chart.index - 1, ArrowDown: chart.index - 1, Home: 0, End: last };
+    if (e.key in moves) {
+      e.preventDefault();
+      chart.pinned = true;
+      showRideHour(chart, Math.min(last, Math.max(0, moves[e.key])));
+    } else if (e.key === 'Escape') {
+      hideRideHour(chart);
+    }
+  });
+}
+
+// Pressing anywhere outside the chart dismisses a pinned tooltip. Bound once,
+// because the chart itself is rebuilt on every render.
+document.addEventListener('pointerdown', e => {
+  if (rideChart && !rideChart.wrap.contains(e.target)) hideRideHour(rideChart);
+});
+
+function showRideHour(chart, i) {
+  const entry = chart.hours[i];
+  if (!entry) return;
+  chart.bars.forEach((bar, j) => RIDE_BAR_ACTIVE.forEach(c => bar.classList.toggle(c, j === i)));
+  chart.tip.innerHTML = rideTipMarkup(entry);
+  chart.tip.hidden = false;
+  updateRideSlider(chart, i);
+
+  // Centre over the bar, but never past either edge of the chart.
+  const wrapBox = chart.wrap.getBoundingClientRect();
+  const barBox = chart.bars[i].getBoundingClientRect();
+  const centre = barBox.left + barBox.width / 2 - wrapBox.left;
+  const width = chart.tip.offsetWidth;
+  chart.tip.style.left = `${Math.min(Math.max(0, centre - width / 2), wrapBox.width - width)}px`;
+}
+
+function hideRideHour(chart) {
+  chart.pinned = false;
+  chart.dragging = false;
+  chart.tip.hidden = true;
+  chart.bars.forEach(bar => RIDE_BAR_ACTIVE.forEach(c => bar.classList.remove(c)));
+}
+
+/** Keep the slider's position and spoken value in step with the tooltip. */
+function updateRideSlider(chart, i) {
+  chart.index = i;
+  const entry = chart.hours[i];
+  if (!entry) return;
+  const d = describeHourConditions(entry.hour, state.unitSystem);
+  chart.slider.setAttribute('aria-valuenow', String(i));
+  chart.slider.setAttribute('aria-valuetext',
+    `${formatDayPrefix(entry.date)}${formatClock(entry.date)}, ${entry.score} out of 10, ${entry.tier.label}. ${hourConditionsSentence(d)}`);
+}
+
+function rideTipMarkup(entry) {
+  const d = describeHourConditions(entry.hour, state.unitSystem);
+  const t = tone(entry.tier.tone);
+  const wind = `${d.wind}${d.windFrom ? ` from ${d.windFrom}` : ''}${d.gusts ? ` · gusts ${d.gusts}` : ''}`;
+  return `
+    <div class="flex items-center justify-between gap-3 mb-1">
+      <span class="font-semibold">${escapeHtml(`${formatDayPrefix(entry.date)}${formatClock(entry.date)}`)}</span>
+      <span class="inline-flex items-center gap-1 ${t.badge} px-2 py-0.5 rounded-full font-medium">${entry.tier.emoji} ${entry.score}/10</span>
+    </div>
+    <div>🌡 ${escapeHtml(d.temp)}${d.feelsLike ? ` <span class="text-gray-500 dark:text-gray-400">· feels ${escapeHtml(d.feelsLike)}</span>` : ''}</div>
+    <div>💨 ${escapeHtml(wind)}</div>
+    <div>💧 ${escapeHtml(d.rainChance)} chance${d.rainAmount ? ` · ${escapeHtml(d.rainAmount)}` : ''}</div>`;
 }
 
 // --- Insights ---------------------------------------------------------------

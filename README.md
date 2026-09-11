@@ -16,6 +16,7 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 - Kit and pacing recommendations driven by the actual conditions
 - Sunrise/sunset, wind gusts, feels-like temperature, and AQI
 - Hourly strip colour-coded by rideability; 7-day outlook with a temperature chart
+- Point at any hour on the "When should I ride?" chart for its temperature, feels-like, wind, gusts and rain — hover, tap, or drag a finger along it
 - Geolocation first, city search fallback, recent locations
 - Full metric/imperial switching (°C·km/h·km ↔ °F·mph·mi), persisted
 - Every time is shown on the forecast location's clock — check Tel Aviv from California and "now" is Tel Aviv's now
@@ -200,6 +201,7 @@ Weather icons load from `assets/icons/weather2/static/`. Each weather code has a
 
 - City search is a proper ARIA combobox: arrow keys, Enter, Escape, `aria-activedescendant`
 - Activity tabs use the roving-tabindex pattern (arrows, Home/End)
+- The ride chart is a `role="slider"` over the hours: arrows and Home/End move through them, and `aria-valuetext` reads the same conditions the tooltip shows. It allows `touch-action: pan-y`, so dragging sideways scrubs while dragging up and down still scrolls the page
 - Help dialog traps focus, closes on Escape, and restores focus to its trigger
 - Toast is an `aria-live` region; the error banner is `role="alert"`
 - Skip-to-content link, and `prefers-reduced-motion` is respected
