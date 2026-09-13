@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "weather-4-bike",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "9000"],
+      "port": 9000
+    },
+    {
+      "name": "weather-bike-routes",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "../weather-bike-routes", "run", "dev", "--", "--port", "5174", "--strictPort"],
+      "port": 5174
+    }
+  ]
+}
