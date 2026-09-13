@@ -188,7 +188,7 @@ describe('sw.js — deploys do not wipe offline data', () => {
 
 describe('sw.js — shell', () => {
   test('precaches the new modules, so the offline app can start', () => {
-    for (const file of ['js/time.js', 'js/net.js']) {
+    for (const file of ['js/time.js', 'js/net.js', 'js/routes.js']) {
       assert.ok(SOURCE.includes(`'${file}'`), `${file} is in SHELL_ASSETS`);
     }
   });

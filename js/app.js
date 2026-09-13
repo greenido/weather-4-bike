@@ -35,6 +35,7 @@ import {
 } from './units.js';
 import { formatClock as clockAt, dayPrefix, formatWeekday, isNight, describeFreshness } from './time.js';
 import { createLatestGate, isAbort } from './net.js';
+import { bikeRoutesUrl } from './routes.js';
 
 // One gate per kind of request: only the newest may change the screen.
 const loadGate = createLatestGate();
@@ -63,6 +64,7 @@ const THEME_KEY = 'w4b:theme';
 const RIDE_HOURS_KEY = 'w4b:rideHours';
 const BEARING_KEY = 'w4b:routeBearing';
 const COMFORT_KEY = 'w4b:comfortBand';
+// Also read by the Bike Routes app, which shares this origin — see js/routes.js.
 const SPEED_KEY = 'w4b:ridingSpeed';
 
 /** Scoring options derived from rider preferences, passed into every scorer call. */
@@ -140,7 +142,7 @@ function cacheElements() {
     'help-close', 'help-close-2', 'units-c', 'units-f', 'scenic-section', 'scenic-image',
     'scenic-credit', 'daily-temp-chart',
     'theme-toggle', 'theme-toggle-dark-icon', 'theme-toggle-light-icon',
-    'ride-duration', 'route-bearing', 'route-wind', 'compare-btn', 'compare-results',
+    'ride-duration', 'route-bearing', 'route-wind', 'routes-cta', 'compare-btn', 'compare-results',
     'pref-temp-min', 'pref-temp-max', 'pref-speed', 'pref-reset', 'pref-hint'
   ];
   ids.forEach(id => { el[camel(id)] = document.getElementById(id); });
@@ -948,6 +950,7 @@ function renderSkeletons() {
   }
   if (el.bestWindow) el.bestWindow.innerHTML = skeletonBlock('h-20');
   if (el.routeWind) el.routeWind.innerHTML = '';
+  if (el.routesCta) el.routesCta.innerHTML = '';
   if (el.insights) el.insights.innerHTML = skeletonBlock('h-40');
   if (el.hourlyForecast) {
     el.hourlyForecast.innerHTML = Array.from({ length: 8 })
@@ -1084,6 +1087,7 @@ function renderBestWindow() {
       </div>
       ${week ? weekCard : ''}`;
     rideChart = null;
+    renderRoutesCta(week?.start);
     return;
   }
 
@@ -1109,6 +1113,32 @@ function renderBestWindow() {
 
   // A keyboard user starts on the first hour of the recommended window.
   wireRideChart(chartHours, chartHours.findIndex(h => h.date.getTime() === best.start.getTime()));
+  renderRoutesCta(best.start);
+}
+
+/**
+ * Goal: Take the recommended ride to the rider's real routes.
+ * Why: The heading picker is a rough guess at the wind; the Bike Routes app
+ *      works it out on every stretch of a GPX file. Opening it on the same
+ *      start time and speed saves setting them up twice.
+ */
+function renderRoutesCta(start) {
+  if (!el.routesCta) return;
+  if (!start) {
+    el.routesCta.innerHTML = '';
+    return;
+  }
+  const speed = state.ridingSpeedKmh || DISCIPLINES[state.activity].ridingSpeedKmh;
+  const href = bikeRoutesUrl({ start, speedKmh: speed });
+  el.routesCta.innerHTML = `
+    <a href="${escapeHtml(href)}" target="_blank" rel="noopener" class="group flex items-center gap-3 rounded-lg border border-dashed border-gray-300 dark:border-gray-600 px-3 py-2 hover:border-blue-400 hover:bg-blue-50 dark:hover:border-blue-500 dark:hover:bg-gray-700/50 transition-colors">
+      <span class="text-xl" aria-hidden="true">🗺️</span>
+      <span class="flex-1 text-sm">
+        <span class="block font-medium text-blue-700 dark:text-blue-300">Score your GPX routes for this ride</span>
+        <span class="block text-gray-600 dark:text-gray-300">Wind and temperature on every stretch, starting ${formatDayPrefix(start)}${formatClock(start)} at ${formatSpeed(speed, state.unitSystem)}<span class="sr-only"> (opens in a new tab)</span></span>
+      </span>
+      <span class="text-blue-700 dark:text-blue-300 transition-transform group-hover:translate-x-0.5" aria-hidden="true">→</span>
+    </a>`;
 }
 
 // --- Route-aware wind -------------------------------------------------------

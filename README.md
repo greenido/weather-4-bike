@@ -6,6 +6,7 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 
 - **"When should I ride?"** — scores every hour of the week and finds the best contiguous window of daylight, for the ride length you choose. Shows today's best and flags when later in the week is better
 - **Route-aware wind** — pick which way you head out and it scores the outbound and return legs separately, then tells you which direction to start in
+- **Score your GPX routes** — one tap opens [Bike Route Weather](https://greenido.github.io/weather-bike-routes/) on the recommended window and your speed, to get wind and temperature along every stretch of a real route. The link carries `?start=` (an ISO instant) and `?speed=` (km/h); without a speed, that app reads your `w4b:ridingSpeed` setting, since both apps share the `greenido.github.io` origin
 - **Real surface conditions** — gravel and MTB scores use the model's soil moisture, not a rainfall total, so it knows a trail has already dried
 - **Wind chill at riding speed** — what it actually feels like at 28 km/h, not standing still
 - **Compare locations** — score your saved spots side by side and see where the riding is best
@@ -111,12 +112,14 @@ js/
   units.js         # Unit systems and all display formatting  (pure, no DOM)
   time.js          # Location-zone formatting and data freshness  (pure, no DOM)
   net.js           # Request deadlines and "latest request wins"  (pure, no DOM)
+  routes.js        # Link to the Bike Routes app for a given ride  (pure, no DOM)
 test/
   helpers.js       # inZone(), deferred()
   insights.test.js
   units.test.js
   time.test.js
   net.test.js
+  routes.test.js
   weather.test.js  # Parsing and fetch policy, against a Tel Aviv fixture
   sw.test.js       # The real sw.js, in a VM
 assets/
