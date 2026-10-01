@@ -21,7 +21,8 @@
 import { fetchWeatherData, fetchAirQuality, getDaylightRanges, clearWeatherCache, aqiCategory } from './weather.js';
 import {
   getCurrentLocation, searchCities, saveRecentLocation, getRecentLocations,
-  clearRecentLocations, reverseGeocode, setLastLocation, getLastLocation
+  clearRecentLocations, reverseGeocode, setLastLocation, getLastLocation,
+  getSavedPlaces, isSavedPlace, toggleSavedPlace, placeKey
 } from './location.js';
 import {
   DISCIPLINES, scoreCurrent, scoreHourlySeries, findBestWindow, findHeadlineWindow, findRainTiming,
@@ -36,6 +37,7 @@ import {
 import { formatClock as clockAt, dayPrefix, formatWeekday, isNight, describeFreshness } from './time.js';
 import { createLatestGate, isAbort } from './net.js';
 import { bikeRoutesUrl } from './routes.js';
+import { planPlace, rankPlans, scoreWindowAt, shareHash, parseShareHash } from './plan.js';
 
 // One gate per kind of request: only the newest may change the screen.
 const loadGate = createLatestGate();
@@ -53,6 +55,8 @@ const state = {
   routeBearing: null,     // compass bearing of the outbound leg, or null
   comfortBand: null,      // rider-calibrated [minC, maxC], or null for the default
   ridingSpeedKmh: null,   // rider-calibrated, or null for the discipline default
+  compare: null,          // { rows: [{ place, weather } | { place, error }], fromSaved }
+  sharedRide: null,       // { key, start, hours } from a shared link, for that place only
   loading: false,
   error: null
 };
@@ -142,6 +146,7 @@ function cacheElements() {
     'scenic-credit', 'daily-temp-chart',
     'theme-system', 'theme-light', 'theme-dark',
     'ride-duration', 'route-bearing', 'route-wind', 'routes-cta', 'compare-btn', 'compare-results',
+    'compare-card', 'save-place-btn', 'saved-list',
     'pref-temp-min', 'pref-temp-max', 'pref-speed', 'pref-reset', 'pref-hint'
   ];
   ids.forEach(id => { el[camel(id)] = document.getElementById(id); });
@@ -177,6 +182,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   // The label is relative ("8 min ago"), so it has to keep counting.
   setInterval(renderFreshness, 60000);
 
+  const shared = parseShareHash(window.location.hash);
+  if (shared) {
+    await openSharedRide(shared);
+    renderPlaces();
+    return;
+  }
+
   const untouched = loadGate.mark();
   try {
     const last = getLastLocation();
@@ -193,8 +205,31 @@ document.addEventListener('DOMContentLoaded', async () => {
       await loadWeather({ name: 'San Francisco', latitude: 37.7749, longitude: -122.4194, region: 'CA', country: 'USA' });
     }
   }
-  renderRecents();
+  renderPlaces();
 });
+
+/**
+ * Goal: Open a ride a friend shared: their place, discipline and ride length.
+ * Why: "Saturday 8 AM at the reservoir?" should land on that answer, scored
+ *      against the forecast as it is now.
+ * How: Apply the link for this visit only — nothing is saved as the rider's own
+ *      preference — then drop the fragment so a reload is the rider's own app.
+ */
+async function openSharedRide(shared) {
+  if (shared.activity) {
+    state.activity = shared.activity;
+    updateActivityTabsUI();
+  }
+  if (shared.hours) {
+    state.rideHours = shared.hours;
+    if (el.rideDuration) el.rideDuration.value = String(shared.hours);
+  }
+  if (shared.start) {
+    state.sharedRide = { key: placeKey(shared.place), start: shared.start, hours: shared.hours || state.rideHours };
+  }
+  history.replaceState(null, '', window.location.pathname + window.location.search);
+  await loadWeather(shared.place);
+}
 
 /**
  * Goal: Geolocate, then load the forecast there.
@@ -335,7 +370,7 @@ function bindSheets() {
   }
 
   el.locationBtn?.addEventListener('click', () => {
-    renderRecents();
+    renderPlaces();
     // Type straight away with a keyboard; on a touch screen, show the list
     // first rather than throwing up a keyboard over it.
     if (window.matchMedia?.('(pointer: fine)').matches) el.citySearch?.focus();
@@ -370,6 +405,7 @@ function selectActivity(activity) {
   renderBestWindow();
   renderRouteWind();
   renderHourly();
+  renderCompare();
   // Default riding speed is per-discipline, so the calibration hint moves too.
   updatePreferencesUI();
 }
@@ -490,6 +526,7 @@ function bindPlanner() {
       state.rideHours = hours;
       savePreference(RIDE_HOURS_KEY, String(hours));
       renderBestWindow();
+      renderCompare();
     });
   }
 
@@ -576,64 +613,176 @@ function updatePreferencesUI(message) {
   }
 }
 
-// --- Compare locations ------------------------------------------------------
+// --- Where & when: saved places -------------------------------------------
 
 function bindCompare() {
   el.compareBtn?.addEventListener('click', () => runComparison());
+
+  el.savePlaceBtn?.addEventListener('click', () => {
+    if (!state.location) return;
+    const saved = toggleSavedPlace(state.location);
+    showToast(saved ? `Saved ${state.location.name}` : `Removed ${state.location.name}`, 1500);
+    updateSaveButton();
+    renderPlaces();
+    if (state.compare) runComparison();
+    else renderCompare();
+  });
+
+  // Tapping a place in the results opens it.
+  el.compareResults?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-place-index]');
+    const row = btn && state.compare?.rows[Number(btn.dataset.placeIndex)];
+    if (!row) return;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    loadWeather(row.place);
+  });
+
+  // With saved places there is something worth showing: plan them as soon
+  // as the card scrolls into view, instead of waiting for a click.
+  if (el.compareCard && 'IntersectionObserver' in window) {
+    const seen = new IntersectionObserver((entries) => {
+      if (!entries.some(e => e.isIntersecting)) return;
+      seen.disconnect();
+      if (!state.compare && getSavedPlaces().length) runComparison();
+    });
+    seen.observe(el.compareCard);
+  }
+}
+
+function updateSaveButton() {
+  if (!el.savePlaceBtn) return;
+  const saved = isSavedPlace(state.location);
+  el.savePlaceBtn.textContent = saved ? '★ Saved' : '☆ Save this place';
+  el.savePlaceBtn.setAttribute('aria-pressed', String(saved));
+  el.savePlaceBtn.disabled = !state.location;
+}
+
+/** The places to plan: this one, then the saved ones — or recents until there are any. */
+function comparisonPlaces() {
+  const saved = getSavedPlaces();
+  const pool = saved.length ? saved : getRecentLocations().slice(0, 4);
+  const here = state.location ? placeKey(state.location) : null;
+  const others = pool.filter(p => placeKey(p) !== here);
+  return { places: state.location ? [state.location, ...others] : others, fromSaved: saved.length > 0 };
 }
 
 /**
- * Goal: Answer "is it better an hour up the road?".
- * Why: Riders who travel to ride already have their spots saved; scoring them
- *      side by side turns the recents list into a decision tool.
- * How: Fetch each recent location (served from cache when warm) and score it
- *      for the selected discipline. Failures are reported per row, never fatal.
+ * Goal: Answer "where and when should I ride this week?".
+ * Why: Riders who travel to ride have their spots saved; ranking each spot by
+ *      its best window — not by this minute — turns that list into a plan.
+ * How: Fetch each place (served from cache when warm). Scoring happens at
+ *      render, so changing discipline or ride length re-plans without a fetch.
+ *      Failures are reported per row, never fatal.
  */
 async function runComparison() {
   if (!el.compareResults) return;
-  const others = getRecentLocations()
-    .filter(r => !state.location || `${r.latitude},${r.longitude}` !== `${state.location.latitude},${state.location.longitude}`)
-    .slice(0, 4);
-
-  if (!others.length) {
-    el.compareResults.innerHTML = '<p>No other saved locations yet. Search for a city or two, then come back.</p>';
+  const { places, fromSaved } = comparisonPlaces();
+  if (places.length < 2) {
+    state.compare = null;
+    renderCompare();
     return;
   }
 
   el.compareBtn.disabled = true;
   el.compareResults.innerHTML = skeletonBlock('h-24');
-
-  const places = state.location ? [state.location, ...others] : others;
   const rows = await Promise.all(places.map(async (place) => {
     try {
-      const weather = await fetchWeatherData(place.latitude, place.longitude);
-      const result = scoreCurrent(weather, state.activity, scoringOptions());
-      return { place, result };
+      return { place, weather: await fetchWeatherData(place.latitude, place.longitude) };
     } catch (e) {
       return { place, error: e };
     }
   }));
-
-  const scored = rows.filter(r => r.result).sort((a, b) => b.result.score - a.result.score);
-  const failed = rows.filter(r => r.error);
-
   el.compareBtn.disabled = false;
+  state.compare = { rows, fromSaved };
+  renderCompare();
+}
+
+function renderCompare() {
+  if (!el.compareResults) return;
+  updateSaveButton();
+
+  if (!state.compare) {
+    const savedCount = getSavedPlaces().length;
+    el.compareResults.innerHTML = savedCount
+      ? `<p>Plan your ${savedCount + 1} places side by side: each one's best ${state.rideHours}-hour window this week. Press <strong>Compare</strong>.</p>`
+      : '<p><strong>☆ Save</strong> the places you ride — this one, then search for the others and save them too. Each gets ranked by its best window this week, so you know where <em>and</em> when to go.</p>';
+    return;
+  }
+
+  const now = new Date();
+  const rows = state.compare.rows.map((row, index) => ({
+    ...row,
+    index,
+    plan: row.weather
+      ? planPlace(row.weather, state.activity, { rideHours: state.rideHours, scoring: scoringOptions(), now })
+      : null
+  }));
+  const ranked = rankPlans(rows.filter(r => r.plan));
+  const failed = rows.filter(r => r.error);
+  const top = ranked[0]?.plan.best || null;
+  const here = state.location ? placeKey(state.location) : null;
+
+  // Each place's times are on its own clock, like the rest of the app.
+  const windowText = (w, tz) => `${dayPrefix(w.start, now, tz) || 'Today '}${clockAt(w.start, tz)} – ${clockAt(w.end, tz)}`;
+  const placeLabel = (r, i) => `${i === 0 && r.plan.best ? '🏆 ' : ''}${escapeHtml(r.place.name)}${placeKey(r.place) === here ? ' <span class="text-xs font-normal text-gray-500 dark:text-gray-400">(here)</span>' : ''}`;
+  const dayKeys = (state.weather?.daily || ranked[0]?.weather?.daily || []).map(d => d.date);
+
+  // Phone: a ranked list, with the week as a strip of coloured days.
+  const list = ranked.map((r, i) => {
+    const w = r.plan.best;
+    const t = tone(w?.tier.tone);
+    return `<li class="rounded-lg border ${t.border} ${t.soft} px-3 py-2">
+      <div class="flex items-center justify-between gap-2">
+        <button data-place-index="${r.index}" class="min-w-0 truncate text-left font-medium text-gray-900 dark:text-gray-100 hover:underline">${placeLabel(r, i)}</button>
+        ${w ? `<span class="shrink-0 inline-flex items-center gap-1 ${t.badge} px-2.5 py-1 rounded-full text-sm font-medium">${w.tier.emoji} ${w.score}/10</span>` : ''}
+      </div>
+      <div class="text-xs text-gray-600 dark:text-gray-300">${w ? escapeHtml(windowText(w, r.weather.timezone)) : `No ${state.rideHours}-hour daylight window this week`}</div>
+      <div class="mt-2 grid grid-cols-7 gap-1" aria-hidden="true">
+        ${r.plan.days.slice(0, 7).map(d => `<div class="text-center">
+          <div class="h-2 rounded-sm ${tone(d.window?.tier.tone).bar}"></div>
+          <div class="text-[10px] text-gray-500 dark:text-gray-400">${escapeHtml(formatDay(d.dateKey).slice(0, 2))}</div>
+        </div>`).join('')}
+      </div>
+    </li>`;
+  }).join('');
+
+  // Desktop: places × days, each cell that day's best window.
+  const table = `
+    <table class="w-full border-separate border-spacing-1 text-sm">
+      <thead>
+        <tr>
+          <th scope="col" class="text-left font-medium text-gray-500 dark:text-gray-400">Place</th>
+          ${dayKeys.slice(0, 7).map(k => `<th scope="col" class="font-medium text-gray-500 dark:text-gray-400">${escapeHtml(formatDay(k))}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${ranked.map((r, i) => `<tr>
+          <th scope="row" class="max-w-[12rem] truncate text-left font-medium text-gray-900 dark:text-gray-100">
+            <button data-place-index="${r.index}" class="text-left hover:underline">${placeLabel(r, i)}</button>
+          </th>
+          ${r.plan.days.slice(0, 7).map(d => {
+            const w = d.window;
+            if (!w) return '<td class="text-center text-gray-400">—</td>';
+            const tz = r.weather.timezone;
+            const isTop = top && i === 0 && w.start.getTime() === top.start.getTime();
+            return `<td class="rounded-md text-center px-1 py-1 ${tone(w.tier.tone).badge}${isTop ? ' ring-2 ring-blue-500' : ''}" title="${escapeAttr(`${windowText(w, tz)} · ${w.score}/10 ${w.tier.label}`)}">
+              <div class="font-semibold">${w.score}</div>
+              <div class="text-[11px] opacity-80">${escapeHtml(clockAt(w.start, tz))}</div>
+            </td>`;
+          }).join('')}
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+
   el.compareResults.innerHTML = `
-    <ul class="space-y-2">
-      ${scored.map((row, i) => {
-        const t = tone(row.result.tier.tone);
-        const isCurrent = state.location && row.place.name === state.location.name;
-        return `<li class="flex items-center justify-between gap-3 rounded-lg border ${t.border} ${t.soft} px-3 py-2">
-          <div class="min-w-0">
-            <div class="font-medium truncate">${i === 0 ? '🏆 ' : ''}${escapeHtml(row.place.name)}${isCurrent ? ' <span class="text-xs text-gray-500 dark:text-gray-400">(current)</span>' : ''}</div>
-            <div class="text-xs text-gray-600 dark:text-gray-300 truncate">${escapeHtml(row.result.message)}</div>
-          </div>
-          <span class="shrink-0 inline-flex items-center gap-1 ${t.badge} px-2.5 py-1 rounded-full text-sm font-medium">${row.result.tier.emoji} ${row.result.score}/10</span>
-        </li>`;
-      }).join('')}
-      ${failed.map(row => `<li class="rounded-lg border ${TONE.gray.border} px-3 py-2 text-xs text-gray-500 dark:text-gray-400">${escapeHtml(row.place.name)}: forecast unavailable</li>`).join('')}
-    </ul>
-    <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">Scored for ${escapeHtml(DISCIPLINES[state.activity].label)}, current conditions.</p>`;
+    ${top ? `<p class="mb-3 text-gray-900 dark:text-gray-100">Best ride: <strong>${escapeHtml(ranked[0].place.name)}</strong>, ${escapeHtml(windowText(top, ranked[0].weather.timezone))} · ${top.tier.emoji} ${top.score}/10</p>` : ''}
+    <ol class="sm:hidden space-y-2">${list}</ol>
+    <div class="hidden sm:block overflow-x-auto">${table}</div>
+    ${failed.length ? `<ul class="mt-2 space-y-1">${failed.map(r => `<li class="text-xs text-gray-500 dark:text-gray-400">${escapeHtml(r.place.name)}: forecast unavailable</li>`).join('')}</ul>` : ''}
+    <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+      ${escapeHtml(DISCIPLINES[state.activity].label)}, ${state.rideHours}-hour rides in daylight. Each place on its own clock. Tap a place to open it.
+      ${state.compare.fromSaved ? '' : ' These are your recent places — <strong>☆ Save</strong> the ones you ride so they stay here.'}
+    </p>`;
 }
 
 // --- Search combobox --------------------------------------------------------
@@ -771,41 +920,64 @@ function locationSubtitle(loc) {
   return parts.length ? `${parts.join(', ')} · ${coords}` : coords;
 }
 
-// --- Recents ----------------------------------------------------------------
+// --- Saved and recent places, in the location sheet --------------------------
 
-/** The recent places, listed inside the location sheet. */
-function renderRecents() {
-  if (!el.recentsList) return;
-  const recents = getRecentLocations();
-  el.recentsList.innerHTML = '';
-  if (!recents.length) return;
+function renderPlaces() {
+  renderPlaceGroup(el.savedList, 'Saved', getSavedPlaces(), null);
+  renderPlaceGroup(el.recentsList, 'Recent', getRecentLocations(), () => { clearRecentLocations(); renderPlaces(); });
+}
+
+/** A titled list of places: tap to open, star to save or un-save. */
+function renderPlaceGroup(host, title, places, onClear) {
+  if (!host) return;
+  host.innerHTML = '';
+  if (!places.length) return;
 
   const header = document.createElement('div');
   header.className = 'flex items-center justify-between px-1 pb-1';
-  header.innerHTML = '<div class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Recent</div>';
-  const clearBtn = document.createElement('button');
-  clearBtn.className = 'text-xs text-red-600 dark:text-red-400 hover:underline';
-  clearBtn.textContent = 'Clear';
-  clearBtn.addEventListener('click', () => { clearRecentLocations(); renderRecents(); });
-  header.appendChild(clearBtn);
-  el.recentsList.appendChild(header);
+  header.innerHTML = `<div class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">${escapeHtml(title)}</div>`;
+  if (onClear) {
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'text-xs text-red-600 dark:text-red-400 hover:underline';
+    clearBtn.textContent = 'Clear';
+    clearBtn.addEventListener('click', onClear);
+    header.appendChild(clearBtn);
+  }
+  host.appendChild(header);
 
   const list = document.createElement('div');
-  list.className = 'rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700 overflow-hidden';
-  recents.forEach(r => {
-    const btn = document.createElement('button');
-    btn.className = 'w-full text-left px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-700';
-    btn.innerHTML = `
-      <div class="font-medium">${escapeHtml(r.name)}</div>
-      <div class="text-sm text-gray-500 dark:text-gray-400">${escapeHtml(locationSubtitle(r))}</div>
+  list.className = 'mb-3 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700 overflow-hidden';
+  places.forEach(place => {
+    const row = document.createElement('div');
+    row.className = 'flex items-stretch';
+
+    const open = document.createElement('button');
+    open.className = 'flex-1 min-w-0 text-left px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-700';
+    open.innerHTML = `
+      <div class="font-medium truncate">${escapeHtml(place.name)}</div>
+      <div class="text-sm text-gray-500 dark:text-gray-400 truncate">${escapeHtml(locationSubtitle(place))}</div>
     `;
-    btn.addEventListener('click', async () => {
+    open.addEventListener('click', async () => {
       el.locationDialog?.close();
-      await loadWeather(r);
+      await loadWeather(place);
     });
-    list.appendChild(btn);
+
+    const saved = isSavedPlace(place);
+    const star = document.createElement('button');
+    star.className = `px-3 text-lg hover:bg-gray-100 dark:hover:bg-gray-700 ${saved ? 'text-amber-500' : 'text-gray-400'}`;
+    star.textContent = saved ? '★' : '☆';
+    star.setAttribute('aria-pressed', String(saved));
+    star.setAttribute('aria-label', `Save ${place.name}`);
+    star.addEventListener('click', () => {
+      toggleSavedPlace(place);
+      renderPlaces();
+      renderCompare();
+    });
+
+    row.append(open, star);
+    list.appendChild(row);
   });
-  el.recentsList.appendChild(list);
+  host.appendChild(list);
 }
 
 // --- Help modal, with a focus trap -----------------------------------------
@@ -946,7 +1118,8 @@ function renderAll() {
   renderHourly();
   renderDaily();
   renderDailyTempChart();
-  renderRecents();
+  renderPlaces();
+  renderCompare();
   wireIconFallbacks(document.body);
 }
 
@@ -1106,15 +1279,20 @@ function renderBestWindow() {
       </div>
     </div>` : '';
 
+  const shared = sharedRideCard(scored);
+
   if (!best) {
     el.bestWindow.innerHTML = `
+      ${shared}
       <div class="rounded-lg border ${TONE.gray.border} ${TONE.gray.soft} p-4">
         <div class="font-medium">No ${hours}-hour window in the next 24 hours of daylight.</div>
         <div class="text-sm text-gray-600 dark:text-gray-300 mt-1">${week ? 'There is one later in the week.' : 'Try a shorter ride, or plan an indoor session.'}</div>
         <div class="text-sm text-gray-600 dark:text-gray-300 mt-2">${rainLine}</div>
       </div>
-      ${week ? weekCard : ''}`;
+      ${week ? weekCard : ''}
+      ${week ? SHARE_BUTTON : ''}`;
     rideChart = null;
+    wireShareButton(week);
     renderRoutesCta(week?.start);
     return;
   }
@@ -1124,6 +1302,7 @@ function renderBestWindow() {
   const sparkline = renderSparkline(chartHours, best);
 
   el.bestWindow.innerHTML = `
+    ${shared}
     <div class="rounded-lg border ${t.border} ${t.soft} p-4">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -1136,12 +1315,77 @@ function renderBestWindow() {
         </div>
       </div>
       ${sparkline}
+      ${SHARE_BUTTON}
     </div>
     ${weekCard}`;
+  wireShareButton(best);
 
   // A keyboard user starts on the first hour of the recommended window.
   wireRideChart(chartHours, chartHours.findIndex(h => h.date.getTime() === best.start.getTime()));
   renderRoutesCta(best.start);
+}
+
+// --- Sharing a ride ---------------------------------------------------------
+
+const SHARE_BUTTON = `
+  <div class="mt-3 flex justify-end">
+    <button data-share-ride class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/70 dark:bg-gray-800/70 px-3 py-1.5 text-sm font-medium hover:bg-white dark:hover:bg-gray-700 transition-colors">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" aria-hidden="true"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/></svg>
+      Share this ride
+    </button>
+  </div>`;
+
+function wireShareButton(ride) {
+  el.bestWindow.querySelector('[data-share-ride]')?.addEventListener('click', () => shareRide(ride));
+}
+
+/**
+ * Goal: Hand a ride to a riding partner as a link.
+ * Why: Group rides get planned in a chat; "Sat 8–10, 9/10 at the reservoir"
+ *      should open on exactly that, scored by the forecast they see.
+ * How: The ride goes in the URL fragment (see js/plan.js). The system share
+ *      sheet where there is one, the clipboard otherwise.
+ */
+async function shareRide(ride) {
+  if (!state.location || !ride) return;
+  const url = `${window.location.origin}${window.location.pathname}${shareHash({
+    place: state.location, activity: state.activity, hours: ride.hours, start: ride.start
+  })}`;
+  const text = `${DISCIPLINES[state.activity].label} ride in ${state.location.name}: ${formatDayPrefix(ride.start) || 'Today '}${formatClock(ride.start)} – ${formatClock(ride.end)}, ${ride.score}/10`;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'Ride plan', text, url });
+      return;
+    }
+    await navigator.clipboard.writeText(`${text}\n${url}`);
+    showToast('Ride link copied', 1800);
+  } catch (e) {
+    if (e?.name !== 'AbortError') showToast('Could not share the ride');
+  }
+}
+
+/** The ride a shared link proposed, scored against this forecast — at its own place only. */
+function sharedRideCard(scored) {
+  const ride = state.sharedRide;
+  if (!ride || !state.location || ride.key !== placeKey(state.location)) return '';
+  const end = new Date(ride.start.getTime() + ride.hours * 3600 * 1000);
+  const when = `${formatDayPrefix(ride.start) || 'Today '}${formatClock(ride.start)} – ${formatClock(end)}`;
+  const w = scoreWindowAt(scored, ride.start, ride.hours);
+
+  if (!w) {
+    const why = end <= new Date() ? 'it has already happened.' : 'it is outside the forecast.';
+    return `<div class="mb-3 rounded-lg border ${TONE.gray.border} ${TONE.gray.soft} px-3 py-2 text-sm">
+      Shared ride: <strong>${escapeHtml(when)}</strong> — not scored, because ${why}
+    </div>`;
+  }
+  const t = tone(w.tier.tone);
+  return `<div class="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border-2 border-blue-400 dark:border-blue-500 ${t.soft} px-3 py-2">
+    <div>
+      <div class="text-sm text-gray-600 dark:text-gray-300">Shared ride · ${escapeHtml(DISCIPLINES[state.activity].label)}</div>
+      <div class="font-semibold">${escapeHtml(when)}</div>
+    </div>
+    <span class="inline-flex items-center gap-1 ${t.badge} px-2.5 py-1 rounded-full text-sm font-medium">${w.tier.emoji} ${w.score}/10 · ${escapeHtml(w.tier.label)}</span>
+  </div>`;
 }
 
 /**

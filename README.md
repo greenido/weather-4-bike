@@ -10,7 +10,8 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 - **Score your GPX routes** — one tap opens [Bike Route Weather](https://greenido.github.io/weather-bike-routes/) on the recommended window and your speed, to get wind and temperature along every stretch of a real route. The link carries `?start=` (an ISO instant) and `?speed=` (km/h); without a speed, that app reads your `w4b:ridingSpeed` setting, since both apps share the `greenido.github.io` origin
 - **Real surface conditions** — gravel and MTB scores use the model's soil moisture, not a rainfall total, so it knows a trail has already dried
 - **Wind chill at riding speed** — what it actually feels like at 28 km/h, not standing still
-- **Compare locations** — score your saved spots side by side and see where the riding is best
+- **Where & when should I ride?** — star the places you ride; each is ranked by its best window this week (for your discipline and ride length), with a places × days grid on desktop and a ranked list on a phone. Tap a place to open it
+- **Share a ride** — sends a link that opens on the same place, discipline, ride length and start time, scored against the forecast your friend sees. The ride travels in the URL fragment, which never reaches a server or the page's analytics, and coordinates are rounded to ~1 km
 - **Calibrated to you** — set your own comfortable temperature range and typical speed
 - Rideability score (1–10) per discipline, with a transparent penalty breakdown
 - Rain timing ("dry until 2pm" / "clearing around 4pm") rather than just a daily percentage
@@ -78,7 +79,7 @@ Everything outside `app.js` is pure and dependency-free, so it is directly testa
 npm test
 ```
 
-161 tests cover the penalty model, unknown-vs-zero handling, hard hazard ceilings, per-discipline weighting, the best-window search, rain timing, unit conversion, time zones, request races and timeouts, and the service worker.
+187 tests cover the penalty model, unknown-vs-zero handling, hard hazard ceilings, per-discipline weighting, the best-window search, rain timing, unit conversion, time zones, request races and timeouts, the service worker, saved places, multi-place planning and share links.
 
 - **Time-zone tests run under several process zones** (`inZone` in `test/helpers.js`). The time-zone bug only exists when the viewer's zone differs from the location's, and CI runs in UTC — a test that just runs "normally" passes while the app is wrong for everyone else.
 - **`sw.js` is tested as shipped.** It is a classic worker script, not a module, so `test/sw.test.js` runs the real file in a Node VM with fake `caches` and `fetch`.

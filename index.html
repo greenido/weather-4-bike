@@ -128,6 +128,7 @@
             </svg>
             Use my current location
           </button>
+          <div id="saved-list"></div>
           <div id="recents-list"></div>
         </div>
       </dialog>
@@ -295,13 +296,16 @@
           <div id="daily-temp-chart" class="mt-4"></div>
         </section>
 
-        <!-- Compare locations -->
-        <section class="lg:col-span-12 min-w-0 rounded-lg shadow-lg p-4 bg-white dark:bg-gray-800" aria-labelledby="compare-heading">
+        <!-- Where & when: saved places ranked by their best window this week -->
+        <section id="compare-card" class="lg:col-span-12 min-w-0 rounded-lg shadow-lg p-4 bg-white dark:bg-gray-800" aria-labelledby="compare-heading">
           <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-            <h2 id="compare-heading" class="text-lg font-semibold">Compare locations</h2>
-            <button id="compare-btn" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Score my recent locations</button>
+            <h2 id="compare-heading" class="text-lg font-semibold">Where &amp; when should I ride?</h2>
+            <div class="flex flex-wrap items-center gap-2">
+              <button id="save-place-btn" aria-pressed="false" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">☆ Save this place</button>
+              <button id="compare-btn" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">Compare</button>
+            </div>
           </div>
-          <div id="compare-results" class="text-sm text-gray-600 dark:text-gray-300">Look up a few places with the location button, then compare them here to see where the riding is best.</div>
+          <div id="compare-results" aria-live="polite" class="text-sm text-gray-600 dark:text-gray-300"></div>
         </section>
       </main>
 

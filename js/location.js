@@ -18,6 +18,8 @@ import { fetchWithTimeout } from './net.js';
 const RECENTS_KEY = 'w4b_recent_locations_v1';
 const LAST_KEY = 'w4b_last_location_v1';
 const MAX_RECENTS = 15;
+const SAVED_KEY = 'w4b:savedPlaces';
+const MAX_SAVED = 8;
 
 /**
  * Goal: Obtain the user's current geolocation coordinates.
@@ -163,6 +165,58 @@ function getRecentLocationsInternal() {
 
 function normalizeName(name) {
   return String(name || '').trim().toLowerCase();
+}
+
+// --- Saved places -----------------------------------------------------------
+
+/**
+ * Goal: Keep the rider's regular spots, in the order they saved them.
+ * Why: Recents churn with every search, so they cannot anchor a comparison.
+ *      A starred place stays until the rider un-stars it.
+ * How: Identify a place by its rounded coordinates, so the same spot found by
+ *      search and by geolocation is one place. Capped at MAX_SAVED.
+ */
+export function placeKey(location) {
+  return `${Number(location?.latitude).toFixed(3)},${Number(location?.longitude).toFixed(3)}`;
+}
+
+export function getSavedPlaces() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(SAVED_KEY) || '[]');
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(p => p && Number.isFinite(p.latitude) && Number.isFinite(p.longitude));
+  } catch (e) {
+    return [];
+  }
+}
+
+export function isSavedPlace(location) {
+  if (!location) return false;
+  const key = placeKey(location);
+  return getSavedPlaces().some(p => placeKey(p) === key);
+}
+
+/** Star or un-star a place. Returns whether it is saved afterwards. */
+export function toggleSavedPlace(location) {
+  const saved = getSavedPlaces();
+  const key = placeKey(location);
+  const without = saved.filter(p => placeKey(p) !== key);
+  const nowSaved = without.length === saved.length;
+  const next = nowSaved
+    ? [...saved, {
+        name: String(location.name || ''),
+        latitude: Number(location.latitude),
+        longitude: Number(location.longitude),
+        region: String(location.region || ''),
+        country: String(location.country || '')
+      }].slice(-MAX_SAVED)
+    : without;
+  try {
+    localStorage.setItem(SAVED_KEY, JSON.stringify(next));
+  } catch (e) {
+    return !nowSaved; // nothing changed
+  }
+  return nowSaved;
 }
 
 /**
