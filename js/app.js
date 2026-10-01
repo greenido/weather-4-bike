@@ -24,7 +24,7 @@ import {
   clearRecentLocations, reverseGeocode, setLastLocation, getLastLocation
 } from './location.js';
 import {
-  DISCIPLINES, scoreCurrent, scoreHourlySeries, findBestWindow, findRainTiming,
+  DISCIPLINES, scoreCurrent, scoreHourlySeries, findBestWindow, findHeadlineWindow, findRainTiming,
   generateSafetyAlerts, generateRecommendations, scoreTier, scoreOutAndBack,
   comfortBand, DEFAULT_COMFORT_BAND
 } from './insights.js';
@@ -122,8 +122,6 @@ const ACTIVITY_TAB_ACTIVE = {
   mtb: 'bg-green-600 text-white'
 };
 const TAB_INACTIVE = 'bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700';
-
-const ACTIVITY_EMOJI = { road: '🚴🏼‍♂️', gravel: '🚴🏼', mtb: '🚵🏼‍♀️' };
 
 function tone(key) {
   return TONE[key] || TONE.gray;
@@ -321,7 +319,7 @@ function bindUI() {
   });
 }
 
-/** Tabs follow the WAI-ARIA roving-tabindex pattern: arrows move, Home/End jump. */
+/** A radio group with a roving tabindex: arrows move and select, Home/End jump. */
 function bindActivityTabs() {
   el.activityButtons.forEach((btn, index) => {
     btn.addEventListener('click', () => selectActivity(btn.dataset.activity));
@@ -344,6 +342,7 @@ function selectActivity(activity) {
   state.activity = activity;
   savePreference(ACTIVITY_KEY, activity);
   updateActivityTabsUI();
+  renderCurrent();
   renderInsights();
   renderBestWindow();
   renderRouteWind();
@@ -357,7 +356,7 @@ function updateActivityTabsUI() {
     const active = btn.dataset.activity === state.activity;
     const activeClass = ACTIVITY_TAB_ACTIVE[btn.dataset.activity] || ACTIVITY_TAB_ACTIVE.road;
     btn.className = `px-4 py-2 font-medium focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 transition-colors ${active ? activeClass : TAB_INACTIVE}`;
-    btn.setAttribute('aria-selected', String(active));
+    btn.setAttribute('aria-checked', String(active));
     btn.tabIndex = active ? 0 : -1;
   });
 }
@@ -977,15 +976,30 @@ function renderCurrent() {
   const feelsDiffers = c.apparentTemperature != null && c.temperature != null
     && Math.abs(Number(c.apparentTemperature) - Number(c.temperature)) >= 1;
 
+  // The verdict for going out now, so the first screen answers the question.
+  const now = scoreCurrent(state.weather, state.activity, scoringOptions());
+  const t = tone(now.tier.tone);
+
   el.currentSummary.innerHTML = `
-    <div class="flex items-end gap-3 flex-wrap">
-      <div class="text-5xl font-bold">${formatTemp(c.temperature, sys)}</div>
-      <div class="text-lg text-gray-600 dark:text-gray-300">${escapeHtml(c.weatherText || '')}</div>
+    <div class="flex items-center gap-4">
+      ${weatherIconMarkup(c.weatherCode, 'w-16 h-16 shrink-0', isNightAt(new Date()))}
+      <div class="min-w-0">
+        <div class="flex items-end gap-3 flex-wrap">
+          <div class="text-5xl font-bold">${formatTemp(c.temperature, sys)}</div>
+          <div class="text-lg text-gray-600 dark:text-gray-300">${escapeHtml(c.weatherText || '')}</div>
+        </div>
+        <div class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          ${feelsDiffers ? `Feels like ${formatTemp(c.apparentTemperature, sys)} · ` : ''}Wind ${formatSpeed(c.windSpeed, sys)} ${degToCardinal(c.windDirection)}${sunLine()}
+        </div>
+      </div>
     </div>
-    <div class="text-sm text-gray-500 dark:text-gray-400 mt-1">
-      ${feelsDiffers ? `Feels like ${formatTemp(c.apparentTemperature, sys)} · ` : ''}Wind ${formatSpeed(c.windSpeed, sys)} ${degToCardinal(c.windDirection)}${sunLine()}
+    <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border ${t.border} ${t.soft} px-3 py-2">
+      <span class="font-semibold">Ride now <span class="font-normal text-gray-600 dark:text-gray-300">· ${escapeHtml(DISCIPLINES[state.activity].label)}</span></span>
+      <span class="inline-flex items-center gap-1 ${t.badge} px-2.5 py-1 rounded-full text-sm font-medium">${now.tier.emoji} ${now.score}/10 · ${escapeHtml(now.tier.label)}</span>
+      <span class="text-sm text-gray-600 dark:text-gray-300">${escapeHtml(now.message)}</span>
     </div>
   `;
+  wireIconFallbacks(el.currentSummary);
 
   renderFreshness();
 
@@ -1046,7 +1060,7 @@ function renderBestWindow() {
   const dl = daylight.length ? daylight : null;
 
   const search = { daylight: dl, minHours: hours, maxHours: hours };
-  const best = findBestWindow(scored, { ...search, withinHours: 24 });
+  const best = findHeadlineWindow(scored, { ...search, withinHours: 24 });
   const week = findBestWindow(scored, { ...search, withinHours: 168 });
   const rain = findRainTiming(state.weather.hourly, { hours: 24 });
 
@@ -1379,7 +1393,8 @@ function renderInsights() {
   const c = state.weather.current;
 
   if (el.insightsCard) {
-    el.insightsCard.className = `rounded-lg shadow-lg p-4 backdrop-blur ${ACTIVITY_CARD_BG[state.activity]}`;
+    // Keep the grid placement from index.html; only the background follows the discipline.
+    el.insightsCard.className = `lg:col-span-5 min-w-0 rounded-lg shadow-lg p-4 backdrop-blur ${ACTIVITY_CARD_BG[state.activity]}`;
   }
 
   const result = scoreCurrent(state.weather, state.activity, scoringOptions());
@@ -1411,57 +1426,39 @@ function renderInsights() {
   const comfort = temperatureComfort(c.apparentTemperature ?? c.temperature, sys);
   const summaryLine = `${result.tier.label} conditions with ${windDescriptor(c.windSpeed)}`;
 
+  // The headline score lives in the "Right now" card; this card explains it.
   el.insights.innerHTML = `
-    <div class="flex flex-wrap items-center justify-between gap-2">
-      <div class="text-sm text-gray-600 dark:text-gray-300">
-        Selected: <span class="mr-1">${ACTIVITY_EMOJI[state.activity]}</span><span class="font-medium">${escapeHtml(DISCIPLINES[state.activity].label)}</span>
-      </div>
-      <div class="inline-flex items-center gap-2 ${t.badge} px-3 py-1 rounded-full text-sm font-medium shadow-sm">
-        ${result.tier.emoji} <span>${result.score}/10 – ${escapeHtml(result.tier.label)}</span>
-      </div>
-    </div>
     ${alertsHtml}
 
-    <section class="mt-3 rounded-lg border ${t.border} p-4 ${t.soft}">
-      <div class="flex flex-col sm:flex-row gap-4">
-        <div class="flex-1">
-          <div class="text-lg font-semibold mb-1">Biking Conditions</div>
-          <div class="text-sm text-gray-600 dark:text-gray-300 mb-3">${escapeHtml(summaryLine)}</div>
-          <div class="text-3xl font-bold">${result.score}<span class="text-lg font-medium text-gray-500 dark:text-gray-400">/10</span></div>
-          <div class="text-sm mb-3">${escapeHtml(result.message)}</div>
+    <section class="rounded-lg border ${t.border} p-4 ${t.soft}">
+      <div class="flex items-baseline justify-between gap-3">
+        <div class="text-lg font-semibold">Biking Conditions</div>
+        <div class="text-3xl font-bold">${result.score}<span class="text-lg font-medium text-gray-500 dark:text-gray-400">/10</span></div>
+      </div>
+      <div class="text-sm text-gray-600 dark:text-gray-300 mb-3">${escapeHtml(summaryLine)}</div>
 
-          <div class="text-sm font-medium mb-1">Key Factors</div>
-          <ul class="text-sm mb-3 space-y-1">
-            <li class="flex items-center gap-2">${icon('wind')}<span>Wind: ${formatSpeed(c.windSpeed, sys)} ${degToCardinal(c.windDirection)}${c.windGusts != null ? `, gusting ${formatSpeed(c.windGusts, sys)}` : ''}</span></li>
-            <li class="flex items-center gap-2">${icon('temp')}<span>Feels like: ${formatTemp(c.apparentTemperature ?? c.temperature, sys)} (${comfort})</span></li>
-            ${onBikeChillRow(result)}
-            <li class="flex items-center gap-2">${icon('humidity')}<span>Rain: ${formatPercent(c.precipitationProbability)} chance</span></li>
-            <li class="flex items-center gap-2">${icon('visibility')}<span>Visibility: ${formatVisibility(c.visibility, sys)}</span></li>
-            ${surfaceRow(result)}
-          </ul>
+      <div class="text-sm font-medium mb-1">Key Factors</div>
+      <ul class="text-sm mb-3 space-y-1">
+        <li class="flex items-center gap-2">${icon('wind')}<span>Wind: ${formatSpeed(c.windSpeed, sys)} ${degToCardinal(c.windDirection)}${c.windGusts != null ? `, gusting ${formatSpeed(c.windGusts, sys)}` : ''}</span></li>
+        <li class="flex items-center gap-2">${icon('temp')}<span>Feels like: ${formatTemp(c.apparentTemperature ?? c.temperature, sys)} (${comfort})</span></li>
+        ${onBikeChillRow(result)}
+        <li class="flex items-center gap-2">${icon('humidity')}<span>Rain: ${formatPercent(c.precipitationProbability)} chance</span></li>
+        <li class="flex items-center gap-2">${icon('visibility')}<span>Visibility: ${formatVisibility(c.visibility, sys)}</span></li>
+        ${surfaceRow(result)}
+      </ul>
 
-          <div class="text-sm font-medium mb-1">Recommendations</div>
-          <ul class="text-sm space-y-1">
-            ${recommendations.map(r => `<li class="flex items-start gap-2">${icon(r.icon)}<span>${escapeHtml(r.text)}</span></li>`).join('')}
-          </ul>
-        </div>
+      <div class="text-sm font-medium mb-1">Recommendations</div>
+      <ul class="text-sm space-y-1">
+        ${recommendations.map(r => `<li class="flex items-start gap-2">${icon(r.icon)}<span>${escapeHtml(r.text)}</span></li>`).join('')}
+      </ul>
 
-        <div class="sm:w-72 w-full sm:border-l sm:pl-4 border-gray-200 dark:border-gray-700">
-          <button id="bike-more-btn" class="text-sm underline" aria-expanded="false" aria-controls="bike-explain">Score details</button>
-          <div id="bike-explain" class="mt-2 hidden text-sm text-gray-700 dark:text-gray-200">
-            <div>Starts at 10.0, then:</div>
-            <ul class="mt-1 list-disc pl-5 space-y-0.5">${penaltyRows}</ul>
-            ${result.ceilings.length ? `<div class="mt-2">Capped at ${result.ceilings[0].cap} — ${escapeHtml(result.ceilings[0].reason.toLowerCase())}.</div>` : ''}
-            ${unknownNote}
-          </div>
-          <div class="mt-4 flex justify-center items-center">
-            <div class="relative">
-              <span class="absolute inset-0 bg-white/30 dark:bg-black/30 blur-xl rounded-full"></span>
-              <span class="relative inline-block drop-shadow-xl">
-                ${weatherIconMarkup(c.weatherCode, 'h-40 sm:h-48 md:h-56 w-auto opacity-90', isNightAt(new Date()))}
-              </span>
-            </div>
-          </div>
+      <div class="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+        <button id="bike-more-btn" class="text-sm underline" aria-expanded="false" aria-controls="bike-explain">Score details</button>
+        <div id="bike-explain" class="mt-2 hidden text-sm text-gray-700 dark:text-gray-200">
+          <div>Starts at 10.0, then:</div>
+          <ul class="mt-1 list-disc pl-5 space-y-0.5">${penaltyRows}</ul>
+          ${result.ceilings.length ? `<div class="mt-2">Capped at ${result.ceilings[0].cap} — ${escapeHtml(result.ceilings[0].reason.toLowerCase())}.</div>` : ''}
+          ${unknownNote}
         </div>
       </div>
     </section>
@@ -1474,8 +1471,6 @@ function renderInsights() {
     moreBtn.textContent = hidden ? 'Score details' : 'Hide details';
     moreBtn.setAttribute('aria-expanded', String(!hidden));
   });
-
-  wireIconFallbacks(el.insights);
 }
 
 /**

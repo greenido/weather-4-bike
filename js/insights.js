@@ -737,6 +737,26 @@ export function findBestWindow(scoredHours, options = {}) {
   return best;
 }
 
+/**
+ * Goal: Pick the window to headline — the best one, unless a sooner one is
+ *       nearly as good.
+ * Why: "Tomorrow 10 AM, 9/10" over "today 12 PM, 8.5/10" tells a rider who
+ *      could go out now to wait a day for half a point the forecast cannot
+ *      promise. Sooner is worth a small margin.
+ * How: Find the best window, then the best one that ends before it starts.
+ *      The sooner one wins if it is within `margin` of the best.
+ *
+ * Takes the same options as findBestWindow, plus `margin` (default 0.5).
+ */
+export function findHeadlineWindow(scoredHours, options = {}) {
+  const best = findBestWindow(scoredHours, options);
+  if (!best) return null;
+  const margin = options.margin ?? 0.5;
+  const earlier = scoredHours.filter(h => h.date.getTime() < best.start.getTime());
+  const sooner = findBestWindow(earlier, options);
+  return sooner && sooner.score >= best.score - margin ? sooner : best;
+}
+
 function isContiguous(slice) {
   for (let i = 1; i < slice.length; i++) {
     const gap = slice[i].date.getTime() - slice[i - 1].date.getTime();

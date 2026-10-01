@@ -10,7 +10,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  scoreConditions, scoreTier, scoreHourlySeries, findBestWindow, findRainTiming,
+  scoreConditions, scoreTier, scoreHourlySeries, findBestWindow, findHeadlineWindow, findRainTiming,
   recentPrecipSum, mudFactorFromRain, generateSafetyAlerts, generateRecommendations,
   surfaceState, resolveSurface, ridingWindChill, windRelationFor, scoreOutAndBack,
   comfortBand, DEFAULT_COMFORT_BAND, DISCIPLINES, num
@@ -774,5 +774,34 @@ describe('scoreOutAndBack advice does not contradict the leg labels', () => {
         }
       }
     }
+  });
+});
+
+describe('findHeadlineWindow', () => {
+  const base = new Date('2026-10-01T09:00:00Z');
+  const series = scores => scores.map((score, i) => ({ date: new Date(base.getTime() + i * 3600 * 1000), score }));
+  const opts = { now: base, withinHours: 24, minHours: 2, maxHours: 2 };
+
+  test('prefers a sooner window that is nearly as good', () => {
+    // Hours 0–1 average 8.5; hours 4–5 average 9.
+    const pick = findHeadlineWindow(series([8.5, 8.5, 3, 3, 9, 9]), opts);
+    assert.equal(pick.start.getTime(), base.getTime());
+    assert.equal(pick.score, 8.5);
+  });
+
+  test('keeps the later window when it is better by more than the margin', () => {
+    const pick = findHeadlineWindow(series([7, 7, 3, 3, 9, 9]), opts);
+    assert.equal(pick.start.getTime(), base.getTime() + 4 * 3600 * 1000);
+    assert.equal(pick.score, 9);
+  });
+
+  test('the margin is adjustable', () => {
+    const pick = findHeadlineWindow(series([7, 7, 3, 3, 9, 9]), { ...opts, margin: 2 });
+    assert.equal(pick.start.getTime(), base.getTime());
+  });
+
+  test('returns the best window when nothing comes before it, and null when there is none', () => {
+    assert.equal(findHeadlineWindow(series([9, 9, 3, 3]), opts).score, 9);
+    assert.equal(findHeadlineWindow([], opts), null);
   });
 });
