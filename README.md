@@ -4,7 +4,8 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 
 ## Features
 
-- **"When should I ride?"** — scores every hour of the week and finds the best contiguous window of daylight, for the ride length you choose. Shows today's best and flags when later in the week is better
+- **Verdict first** — the first screen answers "should I ride now, and when?": a ride-now score for your discipline, then the best window. The full readings sit one tap away. On desktop the decision and the reasons sit side by side
+- **"When should I ride?"** — scores every hour of the week and finds the best contiguous window of daylight, for the ride length you choose. Shows the best window in the next day — preferring a sooner one when it is within half a point — and flags when later in the week is better
 - **Route-aware wind** — pick which way you head out and it scores the outbound and return legs separately, then tells you which direction to start in
 - **Score your GPX routes** — one tap opens [Bike Route Weather](https://greenido.github.io/weather-bike-routes/) on the recommended window and your speed, to get wind and temperature along every stretch of a real route. The link carries `?start=` (an ISO instant) and `?speed=` (km/h); without a speed, that app reads your `w4b:ridingSpeed` setting, since both apps share the `greenido.github.io` origin
 - **Real surface conditions** — gravel and MTB scores use the model's soil moisture, not a rainfall total, so it knows a trail has already dried
@@ -23,7 +24,7 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 - Every time is shown on the forecast location's clock — check Tel Aviv from California and "now" is Tel Aviv's now
 - Installable PWA with offline support that works on a *bad* connection, not only a dead one, and says how old a saved forecast is
 - Follows your system theme by default; a header toggle overrides it and is remembered. Applied before first paint, so no flash
-- Mobile-first, keyboard accessible
+- Mobile-first, keyboard accessible. The Road / Gravel / MTB switch stays pinned to the top while you scroll, since it re-scores everything
 
 ## Run locally
 
