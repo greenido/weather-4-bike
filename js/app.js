@@ -133,13 +133,14 @@ const el = {};
 function cacheElements() {
   const ids = [
     'location-indicator', 'app-title', 'city-search', 'search-results', 'use-geolocation',
-    'refresh-btn', 'recents-toggle', 'recents-list', 'current-conditions', 'current-summary',
+    'refresh-btn', 'recents-list', 'current-conditions', 'current-summary',
     'current-updated', 'insights', 'insights-card', 'hourly-forecast', 'daily-forecast',
     'best-window', 'toast', 'error-banner', 'error-detail', 'error-retry',
-    'mobile-menu-btn', 'header-controls', 'help-button', 'help-modal', 'help-overlay',
+    'location-btn', 'location-dialog', 'settings-btn', 'settings-dialog',
+    'help-button', 'help-modal', 'help-overlay',
     'help-close', 'help-close-2', 'units-c', 'units-f', 'scenic-section', 'scenic-image',
     'scenic-credit', 'daily-temp-chart',
-    'theme-toggle', 'theme-toggle-dark-icon', 'theme-toggle-light-icon',
+    'theme-system', 'theme-light', 'theme-dark',
     'ride-duration', 'route-bearing', 'route-wind', 'routes-cta', 'compare-btn', 'compare-results',
     'pref-temp-min', 'pref-temp-max', 'pref-speed', 'pref-reset', 'pref-hint'
   ];
@@ -192,7 +193,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       await loadWeather({ name: 'San Francisco', latitude: 37.7749, longitude: -122.4194, region: 'CA', country: 'USA' });
     }
   }
-  renderRecentsDropdown();
+  renderRecents();
 });
 
 /**
@@ -270,9 +271,9 @@ function registerServiceWorker() {
 // ---------------------------------------------------------------------------
 
 function bindUI() {
+  bindSheets();
   bindActivityTabs();
   bindSearch();
-  bindRecents();
   bindUnits();
   bindTheme();
   bindPlanner();
@@ -281,6 +282,7 @@ function bindUI() {
   bindHelpModal();
 
   el.useGeolocation?.addEventListener('click', async () => {
+    el.locationDialog?.close();
     try {
       await loadCurrentPosition();
     } catch {
@@ -301,21 +303,42 @@ function bindUI() {
     if (state.location) await loadWeather(state.location, { force: true });
   });
 
-  el.mobileMenuBtn?.addEventListener('click', () => {
-    if (!el.headerControls) return;
-    const willShow = el.headerControls.classList.contains('hidden');
-    el.headerControls.classList.toggle('hidden', !willShow);
-    el.mobileMenuBtn.setAttribute('aria-expanded', String(willShow));
-  });
-
   document.addEventListener('click', (e) => {
     if (el.searchResults && !el.searchResults.contains(e.target) && e.target !== el.citySearch) {
       closeSearchResults();
     }
-    if (el.recentsList && !el.recentsList.contains(e.target) && e.target !== el.recentsToggle) {
-      el.recentsList.classList.add('hidden');
-      el.recentsToggle?.setAttribute('aria-expanded', 'false');
-    }
+  });
+}
+
+/**
+ * Goal: Open the location and settings sheets from their header buttons.
+ * Why: The header used to carry nine controls, which a phone could only show
+ *      as a stacked menu of unlabelled icons. Two sheets hold all of it now.
+ * How: Native <dialog> with showModal(): it brings the focus trap, Escape, the
+ *      backdrop and focus restoration on close. A click on the backdrop lands
+ *      on the dialog element itself, so that closes it too.
+ */
+function bindSheets() {
+  const sheets = [
+    { dialog: el.locationDialog, opener: el.locationBtn },
+    { dialog: el.settingsDialog, opener: el.settingsBtn }
+  ];
+  for (const { dialog, opener } of sheets) {
+    if (!dialog || !opener) continue;
+    opener.addEventListener('click', () => {
+      dialog.showModal();
+      opener.setAttribute('aria-expanded', 'true');
+    });
+    dialog.addEventListener('close', () => opener.setAttribute('aria-expanded', 'false'));
+    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+    dialog.querySelectorAll('[data-close]').forEach(btn => btn.addEventListener('click', () => dialog.close()));
+  }
+
+  el.locationBtn?.addEventListener('click', () => {
+    renderRecents();
+    // Type straight away with a keyboard; on a touch screen, show the list
+    // first rather than throwing up a keyboard over it.
+    if (window.matchMedia?.('(pointer: fine)').matches) el.citySearch?.focus();
   });
 }
 
@@ -373,16 +396,21 @@ function bindUnits() {
   el.unitsF?.addEventListener('click', () => set('imperial'));
 }
 
+// Segmented controls in the settings sheet.
+const SEGMENT = 'px-3 py-2 text-sm transition-colors';
+const SEGMENT_ON = 'bg-blue-600 text-white font-semibold';
+const SEGMENT_OFF = 'bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700';
+
+function setSegment(btn, on) {
+  if (!btn) return;
+  btn.className = `${SEGMENT} ${on ? SEGMENT_ON : SEGMENT_OFF}`;
+  btn.setAttribute('aria-pressed', String(on));
+}
+
 function updateUnitsToggleUI() {
-  if (!el.unitsC || !el.unitsF) return;
-  const base = 'px-3 py-2 text-sm transition-colors';
-  const active = 'bg-blue-600 text-white font-semibold';
-  const inactive = 'bg-white text-gray-700 dark:bg-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700';
   const metric = state.unitSystem === 'metric';
-  el.unitsC.className = `${base} ${metric ? active : inactive}`;
-  el.unitsF.className = `${base} ${metric ? inactive : active}`;
-  el.unitsC.setAttribute('aria-pressed', String(metric));
-  el.unitsF.setAttribute('aria-pressed', String(!metric));
+  setSegment(el.unitsC, metric);
+  setSegment(el.unitsF, !metric);
 }
 
 // --- Theme -------------------------------------------------------------------
@@ -415,32 +443,29 @@ function applyTheme(theme, { persist = true, source = 'user' } = {}) {
   document.querySelector('meta[name="theme-color"]')
     ?.setAttribute('content', next === 'dark' ? '#111827' : '#2563eb');
 
-  updateThemeToggleUI();
+  updateThemeUI();
   if (persist) savePreference(THEME_KEY, next);
 }
 
-function updateThemeToggleUI() {
-  const dark = state.theme === 'dark';
-  // Show the sun while dark (click to go light), and the moon while light.
-  el.themeToggleLightIcon?.classList.toggle('hidden', !dark);
-  el.themeToggleDarkIcon?.classList.toggle('hidden', dark);
-  el.themeToggle?.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
-  el.themeToggle?.setAttribute('aria-pressed', String(dark));
-  el.themeToggle?.setAttribute(
-    'title',
-    state.themeSource === 'system'
-      ? 'Following your system theme — click to override'
-      : 'Toggle dark/light mode'
-  );
+/** Back to following the OS: forget the stored choice. */
+function followSystemTheme() {
+  try { localStorage.removeItem(THEME_KEY); } catch { /* ignore */ }
+  applyTheme(systemTheme(), { persist: false, source: 'system' });
+}
+
+function updateThemeUI() {
+  const system = state.themeSource === 'system';
+  setSegment(el.themeSystem, system);
+  setSegment(el.themeLight, !system && state.theme === 'light');
+  setSegment(el.themeDark, !system && state.theme === 'dark');
 }
 
 function bindTheme() {
-  el.themeToggle?.addEventListener('click', () => {
-    applyTheme(state.theme === 'dark' ? 'light' : 'dark');
-    // No re-render needed: the SVG chart inherits currentColor, unlike the
-    // Chart.js canvas it replaced, which baked its label colour in at build time.
-    showToast(state.theme === 'dark' ? 'Dark mode' : 'Light mode', 1200);
-  });
+  // No re-render needed: the SVG chart inherits currentColor, unlike the
+  // Chart.js canvas it replaced, which baked its label colour in at build time.
+  el.themeSystem?.addEventListener('click', followSystemTheme);
+  el.themeLight?.addEventListener('click', () => applyTheme('light'));
+  el.themeDark?.addEventListener('click', () => applyTheme('dark'));
 
   // Track the OS while the rider has not overridden it, so flipping the system
   // theme updates a page that is already open.
@@ -720,7 +745,7 @@ function renderSearchResults(cities) {
     li.id = `city-option-${i}`;
     li.setAttribute('role', 'option');
     li.setAttribute('aria-selected', 'false');
-    li.className = 'cursor-pointer px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700';
+    li.className = 'cursor-pointer px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-700';
     li.innerHTML = `
       <div class="font-medium">${escapeHtml(city.name)}</div>
       <div class="text-sm text-gray-500 dark:text-gray-400">${escapeHtml(locationSubtitle(city))}</div>
@@ -734,7 +759,9 @@ function renderSearchResults(cities) {
 async function chooseCity(city) {
   searchGate.begin(); // a query still in flight must not reopen the list
   closeSearchResults();
-  el.citySearch.value = city.name;
+  el.citySearch.value = '';
+  searchOptions = [];
+  el.locationDialog?.close();
   await loadWeather(city);
 }
 
@@ -746,52 +773,39 @@ function locationSubtitle(loc) {
 
 // --- Recents ----------------------------------------------------------------
 
-function bindRecents() {
-  el.recentsToggle?.addEventListener('click', () => {
-    renderRecentsDropdown();
-    const willShow = el.recentsList.classList.contains('hidden');
-    el.recentsList.classList.toggle('hidden', !willShow);
-    el.recentsToggle.setAttribute('aria-expanded', String(willShow));
-  });
-}
-
-function renderRecentsDropdown() {
+/** The recent places, listed inside the location sheet. */
+function renderRecents() {
   if (!el.recentsList) return;
   const recents = getRecentLocations();
   el.recentsList.innerHTML = '';
-
-  if (!recents.length) {
-    const empty = document.createElement('div');
-    empty.className = 'px-3 py-2 text-sm text-gray-500 dark:text-gray-400';
-    empty.textContent = 'No recent locations';
-    el.recentsList.appendChild(empty);
-    return;
-  }
+  if (!recents.length) return;
 
   const header = document.createElement('div');
-  header.className = 'flex items-center justify-between px-3 py-2 border-b border-gray-200 dark:border-gray-700';
-  header.innerHTML = '<div class="text-sm font-medium">Recent</div>';
+  header.className = 'flex items-center justify-between px-1 pb-1';
+  header.innerHTML = '<div class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Recent</div>';
   const clearBtn = document.createElement('button');
-  clearBtn.className = 'text-xs text-red-600 hover:underline';
+  clearBtn.className = 'text-xs text-red-600 dark:text-red-400 hover:underline';
   clearBtn.textContent = 'Clear';
-  clearBtn.addEventListener('click', () => { clearRecentLocations(); renderRecentsDropdown(); });
+  clearBtn.addEventListener('click', () => { clearRecentLocations(); renderRecents(); });
   header.appendChild(clearBtn);
   el.recentsList.appendChild(header);
 
+  const list = document.createElement('div');
+  list.className = 'rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700 overflow-hidden';
   recents.forEach(r => {
     const btn = document.createElement('button');
-    btn.className = 'w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700';
+    btn.className = 'w-full text-left px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-700';
     btn.innerHTML = `
       <div class="font-medium">${escapeHtml(r.name)}</div>
       <div class="text-sm text-gray-500 dark:text-gray-400">${escapeHtml(locationSubtitle(r))}</div>
     `;
     btn.addEventListener('click', async () => {
-      el.recentsList.classList.add('hidden');
-      el.recentsToggle?.setAttribute('aria-expanded', 'false');
+      el.locationDialog?.close();
       await loadWeather(r);
     });
-    el.recentsList.appendChild(btn);
+    list.appendChild(btn);
   });
+  el.recentsList.appendChild(list);
 }
 
 // --- Help modal, with a focus trap -----------------------------------------
@@ -932,7 +946,7 @@ function renderAll() {
   renderHourly();
   renderDaily();
   renderDailyTempChart();
-  renderRecentsDropdown();
+  renderRecents();
   wireIconFallbacks(document.body);
 }
 

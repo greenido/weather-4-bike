@@ -67,75 +67,121 @@
     <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:m-2 focus:rounded-lg focus:bg-blue-600 focus:px-4 focus:py-2 focus:text-white">Skip to content</a>
 
     <div class="min-h-screen max-w-6xl mx-auto px-4 py-4 sm:py-6">
-      <!-- Header -->
-      <header class="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <div class="flex items-center gap-3">
-          <div class="flex items-center gap-2">
-            <div id="app-title" class="text-2xl font-bold">Weather 4 Bike</div>
-            <img src="assets/icons/bike.svg" alt="" class="w-6 h-6 opacity-80" />
-          </div>
-          <span id="location-indicator" class="text-sm text-gray-500 dark:text-gray-400"></span>
+      <!--
+        Header: four controls at every size. Where you are is the primary one, so
+        it is always visible; everything else that used to live here moved into
+        the location and settings sheets below. On a phone the location button
+        takes its own full-width row under the title.
+      -->
+      <header class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-4">
+        <div class="flex items-center gap-2 mr-auto sm:mr-0">
+          <div id="app-title" class="text-xl sm:text-2xl font-bold">Weather 4 Bike</div>
+          <img src="assets/icons/bike.svg" alt="" class="w-6 h-6 opacity-80" />
         </div>
 
-        <button id="mobile-menu-btn" class="sm:hidden rounded-lg border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" aria-label="Open menu" aria-expanded="false" aria-controls="header-controls">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+        <button id="location-btn" aria-haspopup="dialog" aria-controls="location-dialog" aria-expanded="false" class="order-last w-full sm:order-none sm:w-auto sm:max-w-xs min-w-0 flex items-center gap-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+          <span class="sr-only">Location: </span>
+          <span id="location-indicator" class="flex-1 min-w-0 truncate font-medium">Choose a location</span>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 shrink-0 text-gray-500" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
 
-        <div id="header-controls" class="hidden sm:flex flex-col sm:flex-row gap-2 sm:items-center w-full sm:w-auto">
-          <div class="relative w-full sm:w-72">
-            <input
-              id="city-search"
-              type="text"
-              placeholder="Search city..."
-              aria-label="Search city"
-              role="combobox"
-              aria-expanded="false"
-              aria-controls="search-results"
-              aria-autocomplete="list"
-              autocomplete="off"
-              class="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <ul id="search-results" role="listbox" aria-label="City results" class="absolute z-20 mt-1 w-full bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 hidden max-h-72 overflow-auto"></ul>
-          </div>
-
-          <button id="use-geolocation" aria-label="Use current location" title="Use current location" class="rounded-full border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5" aria-hidden="true">
-              <path d="M12 8v8M8 12h8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>
-            </svg>
-          </button>
-
+        <div class="flex items-center gap-2 sm:ml-auto">
           <button id="refresh-btn" aria-label="Refresh forecast" title="Refresh forecast" class="rounded-full border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="w-5 h-5" aria-hidden="true">
               <path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>
             </svg>
           </button>
-
-          <div class="inline-flex rounded-full overflow-hidden border border-gray-300 dark:border-gray-700" role="group" aria-label="Units">
-            <button id="units-c" class="px-3 py-2 text-sm transition-colors" aria-pressed="true" title="Metric: °C, km/h, km">°C</button>
-            <button id="units-f" class="px-3 py-2 text-sm transition-colors" aria-pressed="false" title="Imperial: °F, mph, mi">°F</button>
-          </div>
-
-          <button id="theme-toggle" class="rounded-full border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" aria-label="Switch to light mode" title="Toggle dark/light mode" aria-pressed="true">
-            <svg id="theme-toggle-dark-icon" class="w-5 h-5 hidden" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
-              <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"></path>
-            </svg>
-            <svg id="theme-toggle-light-icon" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
-              <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"></path>
-            </svg>
+          <button id="settings-btn" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-controls="settings-dialog" aria-expanded="false" class="rounded-full border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
-
-          <div class="relative">
-            <button id="recents-toggle" aria-haspopup="true" aria-expanded="false" aria-controls="recents-list" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Recent</button>
-            <div id="recents-list" class="absolute right-0 mt-2 z-10 w-72 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 hidden max-h-80 overflow-auto"></div>
-          </div>
-
-          <a href="https://greenido.github.io/weather-bike-routes/" target="_blank" rel="noopener" aria-label="Bike Routes: score your GPX routes (opens in a new tab)" title="Bike Routes: score your GPX routes" class="rounded-full border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5" aria-hidden="true">
-              <circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>
-            </svg>
-          </a>
-          <button id="help-button" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" aria-haspopup="dialog" aria-controls="help-modal" aria-expanded="false">Help</button>
+          <button id="help-button" aria-label="How the score works" title="How the score works" aria-haspopup="dialog" aria-controls="help-modal" aria-expanded="false" class="rounded-full border border-gray-300 dark:border-gray-700 p-2 w-10 h-10 flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+          </button>
         </div>
       </header>
+
+      <!-- Location sheet: a bottom sheet on a phone, a centred panel on desktop. -->
+      <dialog id="location-dialog" aria-labelledby="location-dialog-title" class="m-0 mt-auto w-full max-w-none max-h-[85vh] overflow-y-auto rounded-t-2xl pb-[env(safe-area-inset-bottom)] sm:m-auto sm:mt-20 sm:max-w-md sm:rounded-lg p-0 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-xl border border-gray-200 dark:border-gray-700 backdrop:bg-black/50">
+        <div class="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+          <h2 id="location-dialog-title" class="text-lg font-semibold">Choose a location</h2>
+          <button data-close class="rounded-md p-1 hover:bg-gray-100 dark:hover:bg-gray-700" aria-label="Close">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="p-4 space-y-3">
+          <input
+            id="city-search"
+            type="search"
+            placeholder="Search city..."
+            aria-label="Search city"
+            role="combobox"
+            aria-expanded="false"
+            aria-controls="search-results"
+            aria-autocomplete="list"
+            autocomplete="off"
+            class="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <ul id="search-results" role="listbox" aria-label="City results" class="hidden rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700 overflow-hidden"></ul>
+          <button id="use-geolocation" class="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-left font-medium text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-gray-700 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5" aria-hidden="true">
+              <path d="M12 8v8M8 12h8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>
+            </svg>
+            Use my current location
+          </button>
+          <div id="recents-list"></div>
+        </div>
+      </dialog>
+
+      <!-- Settings sheet: every preference in one place. -->
+      <dialog id="settings-dialog" aria-labelledby="settings-title" class="m-0 mt-auto w-full max-w-none max-h-[85vh] overflow-y-auto rounded-t-2xl pb-[env(safe-area-inset-bottom)] sm:m-auto sm:mt-20 sm:max-w-md sm:rounded-lg p-0 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-xl border border-gray-200 dark:border-gray-700 backdrop:bg-black/50">
+        <div class="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+          <h2 id="settings-title" class="text-lg font-semibold">Settings</h2>
+          <button data-close class="rounded-md p-1 hover:bg-gray-100 dark:hover:bg-gray-700" aria-label="Close settings">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <div class="p-4 space-y-5 text-sm">
+          <div>
+            <div id="units-label" class="font-semibold mb-2">Units</div>
+            <div class="grid grid-cols-2 rounded-lg overflow-hidden border border-gray-300 dark:border-gray-700" role="group" aria-labelledby="units-label">
+              <button id="units-c" aria-pressed="true">Metric · °C, km/h</button>
+              <button id="units-f" aria-pressed="false">Imperial · °F, mph</button>
+            </div>
+          </div>
+
+          <div>
+            <div id="theme-label" class="font-semibold mb-2">Theme</div>
+            <div class="grid grid-cols-3 rounded-lg overflow-hidden border border-gray-300 dark:border-gray-700" role="group" aria-labelledby="theme-label">
+              <button id="theme-system" aria-pressed="true">System</button>
+              <button id="theme-light" aria-pressed="false">Light</button>
+              <button id="theme-dark" aria-pressed="false">Dark</button>
+            </div>
+          </div>
+
+          <section aria-labelledby="prefs-title">
+            <h3 id="prefs-title" class="font-semibold mb-1">Calibrate it to you</h3>
+            <p class="text-gray-600 dark:text-gray-300 mb-3">A rider acclimatised in Tel Aviv and one in Seattle do not agree on what 15°C means. Tell the app your range and the temperature score follows it.</p>
+
+            <div class="flex flex-wrap items-end gap-3">
+              <label class="flex flex-col gap-1">
+                <span class="text-xs text-gray-600 dark:text-gray-300">Comfortable from</span>
+                <input id="pref-temp-min" type="number" inputmode="numeric" class="w-24 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-xs text-gray-600 dark:text-gray-300">to</span>
+                <input id="pref-temp-max" type="number" inputmode="numeric" class="w-24 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-xs text-gray-600 dark:text-gray-300">Typical riding speed</span>
+                <input id="pref-speed" type="number" inputmode="numeric" min="5" max="60" class="w-28 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </label>
+              <button id="pref-reset" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700">Reset</button>
+            </div>
+            <p id="pref-hint" class="text-xs text-gray-500 dark:text-gray-400 mt-2"></p>
+          </section>
+        </div>
+      </dialog>
 
       <!--
         The discipline changes every score on the page, so it lives above all of
@@ -255,7 +301,7 @@
             <h2 id="compare-heading" class="text-lg font-semibold">Compare locations</h2>
             <button id="compare-btn" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Score my recent locations</button>
           </div>
-          <div id="compare-results" class="text-sm text-gray-600 dark:text-gray-300">Pick a few locations from Recent, then compare them here to see where the riding is best.</div>
+          <div id="compare-results" class="text-sm text-gray-600 dark:text-gray-300">Look up a few places with the location button, then compare them here to see where the riding is best.</div>
         </section>
       </main>
 
@@ -268,6 +314,7 @@
       <footer class="mt-6 mb-2 text-xs text-gray-500 dark:text-gray-400 text-center">
         Forecast by <a href="https://open-meteo.com/" target="_blank" rel="noopener" class="underline">Open-Meteo</a>.
         Weather icons by <a href="https://www.flaticon.com/free-icons/weather" target="_blank" rel="noopener" class="underline">Flaticon</a>.
+        <div class="mt-1">Score real GPX routes with <a href="https://greenido.github.io/weather-bike-routes/" target="_blank" rel="noopener" class="underline">Bike Route Weather</a>.</div>
       </footer>
 
       <!-- Help / About Modal -->
@@ -275,34 +322,15 @@
         <div id="help-overlay" class="absolute inset-0 bg-black/50"></div>
         <div class="relative mx-auto mt-10 w-[92%] sm:w-[680px] max-h-[85vh] overflow-auto bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700">
           <div class="sticky top-0 flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-            <h3 id="help-title" class="text-lg font-semibold">Settings &amp; how the score works</h3>
+            <h3 id="help-title" class="text-lg font-semibold">How the score works</h3>
             <button id="help-close" class="rounded-md p-1 hover:bg-gray-100 dark:hover:bg-gray-700" aria-label="Close help">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
 
           <div class="px-4 py-4 text-sm leading-6 space-y-4">
-            <section class="rounded-lg border border-gray-200 dark:border-gray-700 p-3" aria-labelledby="prefs-title">
-              <h4 id="prefs-title" class="font-semibold mb-1">Calibrate it to you</h4>
-              <p class="text-gray-600 dark:text-gray-300 mb-3">A rider acclimatised in Tel Aviv and one in Seattle do not agree on what 15°C means. Tell the app your range and the temperature score follows it.</p>
+            <p>Your comfortable temperature range and riding speed live in <strong>Settings</strong> (the gear in the header).</p>
 
-              <div class="flex flex-wrap items-end gap-3">
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs text-gray-600 dark:text-gray-300">Comfortable from</span>
-                  <input id="pref-temp-min" type="number" inputmode="numeric" class="w-24 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                </label>
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs text-gray-600 dark:text-gray-300">to</span>
-                  <input id="pref-temp-max" type="number" inputmode="numeric" class="w-24 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                </label>
-                <label class="flex flex-col gap-1">
-                  <span class="text-xs text-gray-600 dark:text-gray-300">Typical riding speed</span>
-                  <input id="pref-speed" type="number" inputmode="numeric" min="5" max="60" class="w-28 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                </label>
-                <button id="pref-reset" class="rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700">Reset</button>
-              </div>
-              <p id="pref-hint" class="text-xs text-gray-500 dark:text-gray-400 mt-2"></p>
-            </section>
 
             <p>Every score starts at <strong>10.0</strong> and subtracts penalties for the conditions. The result is clamped to 1–10. If a measurement is unavailable, its penalty is <em>skipped</em> rather than counted as zero — unknown is not the same as perfect.</p>
 

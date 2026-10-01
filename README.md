@@ -19,11 +19,12 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 - Sunrise/sunset, wind gusts, feels-like temperature, and AQI
 - Hourly strip colour-coded by rideability; 7-day outlook with a temperature chart
 - Point at any hour on the "When should I ride?" chart for its temperature, feels-like, wind, gusts and rain — hover, tap, or drag a finger along it
-- Geolocation first, city search fallback, recent locations
+- Geolocation first, city search fallback, recent locations — all in one location sheet behind the header's location button (a bottom sheet on a phone)
+- A four-control header at every size: location, refresh, settings, help. Units, theme, comfort range and riding speed live together in **Settings**
 - Full metric/imperial switching (°C·km/h·km ↔ °F·mph·mi), persisted
 - Every time is shown on the forecast location's clock — check Tel Aviv from California and "now" is Tel Aviv's now
 - Installable PWA with offline support that works on a *bad* connection, not only a dead one, and says how old a saved forecast is
-- Follows your system theme by default; a header toggle overrides it and is remembered. Applied before first paint, so no flash
+- Follows your system theme by default; Settings → Theme overrides it (System / Light / Dark) and is remembered. Applied before first paint, so no flash
 - Mobile-first, keyboard accessible. The Road / Gravel / MTB switch stays pinned to the top while you scroll, since it re-scores everything
 
 ## Run locally
@@ -60,12 +61,12 @@ Tailwind runs in `darkMode: 'class'`, so the theme lives on `<html class="dark">
 
 There are two sources of truth, in priority order:
 
-1. **An explicit choice**, stored under `w4b:theme`. Written only when the rider clicks the toggle.
+1. **An explicit choice**, stored under `w4b:theme`. Written only when the rider picks Light or Dark in Settings.
 2. **The OS setting**, via `prefers-color-scheme`. Used whenever nothing is stored — which is also the default for a first-time visitor. While in this mode the page tracks live OS changes, so flipping your system theme updates an already-open tab.
 
 The theme is applied by a small **blocking** script in `<head>`. It has to be blocking: `js/app.js` is a deferred module, so applying the theme there would render one frame in the wrong theme. If you change `THEME_KEY` or `systemTheme()` in `js/app.js`, update that inline script to match — it deliberately duplicates that logic.
 
-There is no "reset to system" control; clearing `w4b:theme` in devtools returns to following the OS.
+Picking **System** in Settings removes `w4b:theme`, which returns to following the OS.
 
 > Colour classes used at runtime (score tiers, activity tabs) are written as **complete literal strings** in the lookup tables at the top of `js/app.js`. Tailwind's scanner cannot see a class name assembled by concatenation, so never build one with string interpolation.
 
