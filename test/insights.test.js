@@ -407,6 +407,23 @@ describe('recentPrecipSum', () => {
     assert.equal(recentPrecipSum([], 48), null);
     assert.equal(recentPrecipSum(null, 48), null);
   });
+
+  test('a series that starts inside the window is unknown, not "0 mm, dry"', () => {
+    // A forecast with no past days (the MET Norway backup) starts now; it
+    // cannot know about yesterday's downpour.
+    const base = onTheHour();
+    const hourly = [0, 1, 2].map(offset => ({
+      time: new Date(base.getTime() + offset * 3600 * 1000).toISOString(),
+      precipitation: 0
+    }));
+    assert.equal(recentPrecipSum(hourly, 48, base), null);
+    // Two days on, the forecast itself covers the whole window.
+    const later = Array.from({ length: 50 }, (_, i) => ({
+      time: new Date(base.getTime() + i * 3600 * 1000).toISOString(),
+      precipitation: 0.1
+    }));
+    assert.equal(recentPrecipSum(later, 48, new Date(base.getTime() + 49 * 3600 * 1000)), 4.9);
+  });
 });
 
 // ---------------------------------------------------------------------------

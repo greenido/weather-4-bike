@@ -17,7 +17,7 @@
   - Everything else (CDN scripts, photos): passes straight through.
 */
 
-const VERSION = '7dc8a8dd5af0';
+const VERSION = 'aa3140f46876';
 const SHELL_CACHE = `w4b-shell-${VERSION}`;
 // Deliberately not tied to VERSION: shipping new app code must not throw away
 // the rider's offline forecast. Bump by hand only if the saved shape changes.
@@ -36,6 +36,7 @@ const SHELL_ASSETS = [
   'styles/output.css',
   'js/app.js',
   'js/weather.js',
+  'js/metno.js',
   'js/insights.js',
   'js/location.js',
   'js/units.js',
@@ -51,7 +52,8 @@ const SHELL_ASSETS = [
 const API_HOSTS = [
   'api.open-meteo.com',
   'air-quality-api.open-meteo.com',
-  'geocoding-api.open-meteo.com'
+  'geocoding-api.open-meteo.com',
+  'api.met.no' // backup forecast, see js/metno.js
 ];
 
 self.addEventListener('install', event => {
