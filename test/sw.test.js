@@ -22,16 +22,18 @@ const TIME_SCALE = 1000;
 /** In-memory CacheStorage, enough of it for sw.js. */
 function fakeCaches() {
   const stores = new Map();
+  const added = [];
   const keyOf = req => (typeof req === 'string' ? req : req.url);
   return {
     stores,
+    added,
     async open(name) {
       if (!stores.has(name)) stores.set(name, new Map());
       const store = stores.get(name);
       return {
         async match(req) { return store.get(keyOf(req))?.clone(); },
         async put(req, res) { store.set(keyOf(req), res); },
-        async add(url) { store.set(url, new Response('shell')); }
+        async add(req) { added.push(req); store.set(keyOf(req), new Response('shell')); }
       };
     },
     async keys() { return [...stores.keys()]; },
@@ -39,17 +41,26 @@ function fakeCaches() {
   };
 }
 
+const ORIGIN = 'https://app.example';
+
+/** Request as a worker sees it: relative URLs resolve against the worker's location. */
+class WorkerRequest extends Request {
+  constructor(input, init) {
+    super(typeof input === 'string' ? new URL(input, `${ORIGIN}/`) : input, init);
+  }
+}
+
 function loadWorker(fetchImpl) {
   const listeners = {};
   const caches = fakeCaches();
   const self = {
     addEventListener: (type, fn) => { listeners[type] = fn; },
-    location: { origin: 'https://app.example' },
+    location: { origin: ORIGIN },
     skipWaiting: () => {},
     clients: { claim: () => {} }
   };
   vm.runInContext(SOURCE, vm.createContext({
-    self, caches, fetch: fetchImpl, Response, Request, URL, console,
+    self, caches, fetch: fetchImpl, Response, Request: WorkerRequest, URL, console,
     setTimeout: (fn, ms, ...args) => setTimeout(fn, ms / TIME_SCALE, ...args),
     clearTimeout
   }));
@@ -187,6 +198,31 @@ describe('sw.js — deploys do not wipe offline data', () => {
 });
 
 describe('sw.js — shell', () => {
+  test('install fetches every shell file from the server, never the HTTP cache', async () => {
+    const worker = loadWorker(async () => new Response('x'));
+    const lifetime = [];
+    worker.listeners.install({ waitUntil: p => lifetime.push(p) });
+    await Promise.all(lifetime);
+
+    const { added } = worker.caches;
+    assert.ok(added.length >= 10, 'the whole shell is precached');
+    for (const req of added) {
+      assert.equal(req.cache, 'reload', `${req.url} bypasses the HTTP cache`);
+    }
+    assert.ok(added.some(r => r.url === `${ORIGIN}/js/location.js`));
+  });
+
+  test('the background refresh revalidates with the server', async () => {
+    const seen = [];
+    const worker = loadWorker(async (req, init) => {
+      seen.push(init?.cache);
+      return new Response('fresh');
+    });
+    const { response } = await request(worker, `${ORIGIN}/js/location.js`);
+    assert.equal(await response.text(), 'fresh', 'nothing cached yet: the network answers');
+    assert.deepEqual(seen, ['no-cache']);
+  });
+
   test('precaches the new modules, so the offline app can start', () => {
     for (const file of ['js/time.js', 'js/net.js', 'js/routes.js', 'js/plan.js']) {
       assert.ok(SOURCE.includes(`'${file}'`), `${file} is in SHELL_ASSETS`);

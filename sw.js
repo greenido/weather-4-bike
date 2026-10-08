@@ -8,6 +8,10 @@
 
   How:
   - App shell (HTML/CSS/JS/icons): cache-first, refreshed in the background.
+    Every shell fetch skips the browser's HTTP cache: GitHub Pages lets it keep
+    files for 10 minutes, so right after a deploy it would hand the new version
+    some old modules — a fresh app.js importing a name an old location.js does
+    not export, and the app does not start.
   - Forecast API calls: network-first with a cache fallback, so you get fresh
     data when you can and yesterday's answer rather than an error when you can't.
     "When you can't" includes a network that is merely too slow: after a short
@@ -61,8 +65,11 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(SHELL_CACHE)
       // addAll is atomic: one missing file would reject the whole install, so
-      // add individually and tolerate misses.
-      .then(cache => Promise.allSettled(SHELL_ASSETS.map(url => cache.add(url))))
+      // add individually and tolerate misses. 'reload' goes to the server, not
+      // the HTTP cache, so this version's shell is all of a piece.
+      .then(cache => Promise.allSettled(
+        SHELL_ASSETS.map(url => cache.add(new Request(url, { cache: 'reload' })))
+      ))
       .then(() => self.skipWaiting())
   );
 });
@@ -100,12 +107,16 @@ self.addEventListener('fetch', event => {
   event.respondWith(cacheFirst(request));
 });
 
-/** Serve from cache immediately, then quietly refresh the entry for next time. */
+/**
+ * Serve from cache immediately, then quietly refresh the entry for next time.
+ * The refresh revalidates with the server ('no-cache'): a file that failed to
+ * precache is fetched here, and must not come back stale from the HTTP cache.
+ */
 async function cacheFirst(request) {
   const cache = await caches.open(SHELL_CACHE);
   const cached = await cache.match(request, { ignoreSearch: true });
 
-  const network = fetch(request)
+  const network = fetch(request, { cache: 'no-cache' })
     .then(response => {
       if (response && response.ok) cache.put(request, response.clone());
       return response;
