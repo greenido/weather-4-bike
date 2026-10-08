@@ -189,7 +189,7 @@ All keyless and CORS-enabled:
 - **Geocoding** — `https://geocoding-api.open-meteo.com/v1/search`
 - **Reverse geocoding** — BigDataCloud, no key required
 
-Responses are cached in `sessionStorage` (10 min for forecasts, 30 min for air quality). The refresh button bypasses the cache. The service worker keeps the last good forecast per location in `w4b-data-v1`, which deliberately does not change name when the app is redeployed.
+Responses are cached in `sessionStorage` (10 min for forecasts, 2 min for a MET Norway backup forecast so Open-Meteo gets retried soon, 30 min for air quality). The refresh button bypasses the cache. The service worker keeps the last good forecast per location in `w4b-data-v1`, which deliberately does not change name when the app is redeployed.
 
 Add `?debug=1` to the URL for verbose fetch logging.
 

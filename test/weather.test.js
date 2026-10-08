@@ -358,6 +358,38 @@ describe('fetchWeatherData — MET Norway as the backup', () => {
   });
 });
 
+describe('fetchWeatherData — reusing a backup forecast', () => {
+  function fakeSessionStorage(t) {
+    const store = new Map();
+    globalThis.sessionStorage = {
+      getItem: k => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: k => store.delete(k),
+      key: i => [...store.keys()][i] ?? null,
+      get length() { return store.size; }
+    };
+    t.after(() => { delete globalThis.sessionStorage; });
+  }
+
+  test('reused for two minutes, then Open-Meteo gets another try', async (t) => {
+    fakeSessionStorage(t);
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-11T03:20:00Z') });
+
+    const down = providers({ openMeteo: [json({}, 429)], met: [json(metFixture())] });
+    assert.equal((await fetchWeatherData(32.08, 34.78, opts(down.impl))).source, 'met.no');
+
+    t.mock.timers.tick(90 * 1000);
+    const soon = providers({});
+    assert.equal((await fetchWeatherData(32.08, 34.78, opts(soon.impl))).source, 'met.no');
+    assert.equal(soon.calls.openMeteo.length + soon.calls.met.length, 0, 'served from the cache');
+
+    t.mock.timers.tick(60 * 1000);
+    const recovered = providers({ openMeteo: [json(telAvivFixture())] });
+    assert.equal((await fetchWeatherData(32.08, 34.78, opts(recovered.impl))).source, 'open-meteo');
+    assert.equal(recovered.calls.openMeteo.length, 1);
+  });
+});
+
 describe('fetchWeatherData — deadlines and cancellation', () => {
   test('Open-Meteo gets 15 s, then MET a shorter 8 s; the reduced set is never tried', async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] });

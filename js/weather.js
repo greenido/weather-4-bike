@@ -98,6 +98,9 @@ const DAILY_PARAMS = [
 // v5: fewer variables, and entries may come from the MET Norway backup.
 const CACHE_PREFIX = 'w4b:cache:v5:';
 const FORECAST_TTL_MS = 10 * 60 * 1000;
+// The backup is thinner, so stop reusing it soon and give Open‑Meteo another
+// try: once it recovers, riders should not sit on the backup for ten minutes.
+const BACKUP_TTL_MS = 2 * 60 * 1000;
 const AIR_TTL_MS = 30 * 60 * 1000;
 
 // Longer than the service worker's cache-fallback deadline (sw.js), so with a
@@ -202,7 +205,8 @@ export async function fetchWeatherData(latitude, longitude, options = {}) {
   const key = cacheKey('forecast', latitude, longitude);
   if (!options.force) {
     const cached = readCache(key, FORECAST_TTL_MS);
-    if (cached) {
+    const expiredBackup = cached?.data?.w4bSource && Date.now() - cached.at > BACKUP_TTL_MS;
+    if (cached && !expiredBackup) {
       log.info('[weather] cache hit', key);
       // Re-parse so "nearest hour" and the daily filter track the current clock.
       return withProvenance(formatWeatherData(parseWeatherResponse(cached.data)), cached.data);
