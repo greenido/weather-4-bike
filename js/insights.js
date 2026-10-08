@@ -619,11 +619,16 @@ export function toConditions(record = {}) {
  * Goal: Sum precipitation over the N hours before `at`.
  * Why: Drives the mud/surface factor for gravel and MTB.
  * How: Walk the hourly series (which includes past days) and total the window.
+ *      A series that starts inside the window — a forecast with no past days,
+ *      like the MET Norway backup — cannot know what fell before it began, so
+ *      that is unknown (null), not "0 mm, dry".
  */
 export function recentPrecipSum(hourly, hoursBack, at = new Date()) {
   if (!Array.isArray(hourly) || !hoursBack) return null;
   const end = at instanceof Date ? at.getTime() : new Date(at).getTime();
   const start = end - hoursBack * 3600 * 1000;
+  const firstTime = Math.min(...hourly.map(h => new Date(h.time).getTime()).filter(t => !Number.isNaN(t)));
+  if (!(firstTime <= start + 3600 * 1000)) return null;
   let total = 0;
   let sawAny = false;
   for (const h of hourly) {

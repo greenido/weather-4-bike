@@ -95,7 +95,8 @@ Do not go back to the API's default ISO strings: they are location-local with no
 
 - **Only the newest request may change the screen.** `loadWeather` and city search each take a ticket from a `createLatestGate`; starting a new request aborts the old one, and a late answer is dropped. Without this, tapping one city then another could show — and save as your location — whichever answered last.
 - **Everything has a deadline.** The service worker answers from its saved copy after 6 s; the page gives up after 15 s and shows the retry banner. The page's deadline must stay longer than the worker's, or the saved copy never gets its chance.
-- **Only an HTTP 400 is retried** with the reduced variable set. A timeout or network failure would fail the same way, after making the rider wait twice.
+- **Only an HTTP 400 is retried** with the reduced variable set. A timeout or network failure would fail the same way, after making the rider wait twice. A 5xx gets one retry after a second; a 429 gets none, because Open-Meteo's limits reset by the minute, hour or day.
+- **MET Norway is the backup.** If Open-Meteo cannot answer — rate limit, outage, unreachable — the forecast comes from MET Norway's Locationforecast (free, no key), shaped like an Open-Meteo response, and the page says so. It has no visibility, soil moisture or past days, gusts and chance of rain only in the Nordics, and hourly steps for about 2.5 days; those stay unknown rather than zero. Open-Meteo's free tier is limited per IP address, so riders behind a shared address (office, VPN, mobile carrier) are the ones who need it.
 - **Saved copies say how old they are.** The worker stamps `w4bFetchedAt` into each forecast it saves, and the page shows "Updated 8 min ago" or "Offline · forecast from 3 h ago" — never the time it happened to render.
 
 ## Architecture
@@ -109,7 +110,8 @@ styles/
   output.css       # Compiled — committed, do not edit by hand
 js/
   app.js           # UI controller: state, events, rendering
-  weather.js       # Open-Meteo fetch, parsing, caching, air quality
+  weather.js       # Open-Meteo fetch, parsing, caching, air quality; MET fallback
+  metno.js         # MET Norway backup → Open-Meteo shape, sun times  (pure, no DOM)
   location.js      # Geolocation, geocoding, recents
   insights.js      # Scoring, alerts, best-window search  (pure, no DOM)
   units.js         # Unit systems and all display formatting  (pure, no DOM)
@@ -117,19 +119,20 @@ js/
   net.js           # Request deadlines and "latest request wins"  (pure, no DOM)
   routes.js        # Link to the Bike Routes app for a given ride  (pure, no DOM)
 test/
-  helpers.js       # inZone(), deferred()
+  helpers.js       # inZone(), inZoneAsync(), deferred(), metFixture()
   insights.test.js
   units.test.js
   time.test.js
   net.test.js
   routes.test.js
   weather.test.js  # Parsing and fetch policy, against a Tel Aviv fixture
+  metno.test.js    # MET Norway shaping, symbol codes, sun times
   sw.test.js       # The real sw.js, in a VM
 assets/
   icons/weather2/static/   # Weather icon set
 ```
 
-`insights.js`, `units.js`, `time.js` and `net.js` have no DOM or storage dependencies — that is what makes them testable, and it is worth keeping that way.
+`insights.js`, `units.js`, `time.js`, `net.js` and `metno.js` have no DOM or storage dependencies — that is what makes them testable, and it is worth keeping that way.
 
 ## Scoring
 
@@ -178,14 +181,15 @@ The comfort band defaults to 15–25°C and can be moved in Settings. With the d
 All keyless and CORS-enabled:
 
 - **Forecast** — `https://api.open-meteo.com/v1/forecast`
-  Hourly: `temperature_2m, apparent_temperature, relativehumidity_2m, precipitation_probability, precipitation, weathercode, surface_pressure, cloudcover, visibility, windspeed_10m, winddirection_10m, windgusts_10m, uv_index`
-  Daily: `weathercode, temperature_2m_max/min, apparent_temperature_max/min, precipitation_probability_max, precipitation_sum, windspeed_10m_max, windgusts_10m_max, uv_index_max, sunrise, sunset`
-  Requested with `past_days=3` — the mud/surface factor needs recent rainfall — and `timezone=auto&timeformat=unixtime` (see [Time](#time)).
+  Hourly: `temperature_2m, apparent_temperature, relativehumidity_2m, precipitation_probability, precipitation, weathercode, cloudcover, visibility, windspeed_10m, winddirection_10m, windgusts_10m, uv_index, soil_moisture_0_to_1cm, soil_moisture_1_to_3cm, et0_fao_evapotranspiration`
+  Daily: `weathercode, temperature_2m_max/min, precipitation_probability_max, precipitation_sum, windspeed_10m_max, sunrise, sunset`
+  Requested with `past_days=3` — the mud/surface factor needs recent rainfall — and `timezone=auto&timeformat=unixtime` (see [Time](#time)). Only variables the app reads: Open-Meteo counts a request with more than 10 variables as several calls against its per-IP limit.
+- **Backup forecast** — `https://api.met.no/weatherapi/locationforecast/2.0/complete` (MET Norway), only when Open-Meteo fails. Coordinates truncated to 4 decimals, as MET's terms require; the browser's `Origin` header identifies the app. MET gives no time zone, so the backup uses the zone Open-Meteo last reported for that place (kept in `localStorage`), or else a guess from longitude.
 - **Air quality** — `https://air-quality-api.open-meteo.com/v1/air-quality` (best-effort; failure never blocks the forecast)
 - **Geocoding** — `https://geocoding-api.open-meteo.com/v1/search`
 - **Reverse geocoding** — BigDataCloud, no key required
 
-Responses are cached in `sessionStorage` (10 min for forecasts, 30 min for air quality). The refresh button bypasses the cache. The service worker keeps the last good forecast per location in `w4b-data-v1`, which deliberately does not change name when the app is redeployed.
+Responses are cached in `sessionStorage` (10 min for forecasts, 2 min for a MET Norway backup forecast so Open-Meteo gets retried soon, 30 min for air quality). The refresh button bypasses the cache. The service worker keeps the last good forecast per location in `w4b-data-v1`, which deliberately does not change name when the app is redeployed.
 
 Add `?debug=1` to the URL for verbose fetch logging.
 

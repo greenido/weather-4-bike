@@ -1,5 +1,5 @@
 /*
-  Weather 4 Bike – Weather Data Provider (Open‑Meteo)
+  Weather 4 Bike – Weather Data Provider (Open‑Meteo, MET Norway as backup)
 
   Goal: Fetch forecast + air quality and shape them into a UI-friendly structure
   with current, hourly, and daily slices plus useful derived values.
@@ -11,6 +11,8 @@
   - Call Open‑Meteo with a full variable set, degrading to a reduced set only if
     the API rejects it. Missing variables stay `null` — never 0 — so the scorer
     can tell "unknown" from "zero".
+  - If Open‑Meteo cannot answer — rate limit, outage, unreachable — fall back
+    to MET Norway (js/metno.js), shaped like an Open‑Meteo response.
   - Cache responses in sessionStorage with a short TTL so a reload or a units
     toggle does not re-hit the network.
   - Air quality is fetched best-effort and never blocks the forecast.
@@ -19,7 +21,8 @@
 */
 
 import { unixToIso, localDateKey } from './time.js';
-import { fetchWithTimeout } from './net.js';
+import { fetchWithTimeout, isAbort } from './net.js';
+import { metForecastUrl, metToOpenMeteo, guessTimeZone } from './metno.js';
 
 const DEBUG = (() => {
   try {
@@ -45,7 +48,6 @@ const HOURLY_PARAMS = [
   'precipitation_probability',
   'precipitation',
   'weathercode',
-  'surface_pressure',
   'cloudcover',
   'visibility',
   'windspeed_10m',
@@ -72,17 +74,16 @@ const HOURLY_PARAMS_FALLBACK = [
   'winddirection_10m'
 ].join(',');
 
+// Only what the app reads. Open‑Meteo bills a request with more than 10
+// variables as several calls against the per-IP daily limit, so each unused
+// variable here costs riders on a shared address part of their quota.
 const DAILY_PARAMS = [
   'weathercode',
   'temperature_2m_max',
   'temperature_2m_min',
-  'apparent_temperature_max',
-  'apparent_temperature_min',
   'precipitation_probability_max',
   'precipitation_sum',
   'windspeed_10m_max',
-  'windgusts_10m_max',
-  'uv_index_max',
   'sunrise',
   'sunset'
 ].join(',');
@@ -94,8 +95,12 @@ const DAILY_PARAMS = [
 // Bump when the requested variable set changes, so cached responses from an
 // older shape are not reused without the new fields.
 // v4: times became Unix timestamps.
-const CACHE_PREFIX = 'w4b:cache:v4:';
+// v5: fewer variables, and entries may come from the MET Norway backup.
+const CACHE_PREFIX = 'w4b:cache:v5:';
 const FORECAST_TTL_MS = 10 * 60 * 1000;
+// The backup is thinner, so stop reusing it soon and give Open‑Meteo another
+// try: once it recovers, riders should not sit on the backup for ten minutes.
+const BACKUP_TTL_MS = 2 * 60 * 1000;
 const AIR_TTL_MS = 30 * 60 * 1000;
 
 // Longer than the service worker's cache-fallback deadline (sw.js), so with a
@@ -103,12 +108,28 @@ const AIR_TTL_MS = 30 * 60 * 1000;
 // and show the retry banner instead of skeletons forever.
 const REQUEST_TIMEOUT_MS = 15000;
 
+// The backup only runs after Open‑Meteo failed, possibly after its full
+// deadline — so it gets less time, or a dead network makes the rider wait twice.
+const FALLBACK_TIMEOUT_MS = 8000;
+
+// One retry for a 5xx: a bad gateway or an overloaded node is often gone a
+// second later. Not for 429 — Open‑Meteo's limits reset by the minute, hour or
+// day, and browsers cannot read its Retry-After header cross-origin anyway.
+const SERVER_ERROR_RETRY_MS = 1000;
+
+// Places whose time zone Open‑Meteo has told us, for when only MET answers.
+const TZ_KEY = 'w4b:tz:v1';
+const MAX_TZ_ENTRIES = 50;
+
 // Set by sw.js on the copies it saves. Its presence means this response came
 // from the offline fallback, and its value is when the data really left the API.
 const SW_STAMP = 'w4bFetchedAt';
 
 /** The API refused the request itself (HTTP 400) — e.g. an unsupported variable. */
 class ApiRejection extends Error {}
+
+/** A 5xx: the service, not the request, is at fault — worth one retry. */
+class ServerError extends Error {}
 
 function cacheKey(kind, latitude, longitude) {
   // ~100 m precision is far finer than a weather model cell, and keeps the key stable
@@ -168,28 +189,56 @@ export function clearWeatherCache() {
 /**
  * Goal: Fetch a 7‑day forecast for coordinates and return a normalized object.
  * Why: The UI expects consistent shapes and derived text across views.
- * How: Serve from cache when fresh, otherwise try the full hourly variable set.
- *      Only an HTTP 400 — the API rejecting a variable — is worth retrying with
- *      the reduced set. A timeout or network failure is not: the smaller
- *      request would fail the same way, after making the rider wait twice.
+ * How: Serve from cache when fresh, otherwise ask Open‑Meteo. If it cannot
+ *      answer for any reason, ask MET Norway instead; if that fails too, report
+ *      Open‑Meteo's error, which is the one that explains what went wrong.
+ *      A cancelled request is never retried anywhere.
  *
  * @param {number} latitude
  * @param {number} longitude
- * @param {{force?: boolean, signal?: AbortSignal, fetchImpl?: Function}} options
+ * @param {{force?: boolean, signal?: AbortSignal, fetchImpl?: Function, retryDelayMs?: number}} options
  *        `force` bypasses the cache; `signal` cancels a superseded request.
- * @returns the formatted forecast, plus `fetchedAt` (ms) and `offline`.
+ * @returns the formatted forecast, plus `fetchedAt` (ms), `offline` and
+ *          `source` ('open-meteo' or 'met.no').
  */
 export async function fetchWeatherData(latitude, longitude, options = {}) {
   const key = cacheKey('forecast', latitude, longitude);
   if (!options.force) {
     const cached = readCache(key, FORECAST_TTL_MS);
-    if (cached) {
+    const expiredBackup = cached?.data?.w4bSource && Date.now() - cached.at > BACKUP_TTL_MS;
+    if (cached && !expiredBackup) {
       log.info('[weather] cache hit', key);
       // Re-parse so "nearest hour" and the daily filter track the current clock.
       return withProvenance(formatWeatherData(parseWeatherResponse(cached.data)), cached.data);
     }
   }
 
+  let data;
+  try {
+    data = await fetchOpenMeteo(latitude, longitude, options);
+    rememberTimeZone(latitude, longitude, data.timezone);
+  } catch (primary) {
+    if (isAbort(primary)) throw primary;
+    log.warn('[weather] Open-Meteo unavailable, trying MET Norway', primary);
+    try {
+      data = await fetchMetNorway(latitude, longitude, options);
+    } catch (backup) {
+      if (isAbort(backup)) throw backup;
+      log.warn('[weather] MET Norway unavailable too', backup);
+      throw primary;
+    }
+  }
+
+  writeCache(key, data);
+  return withProvenance(formatWeatherData(parseWeatherResponse(data)), data);
+}
+
+/**
+ * Open‑Meteo, full variable set first. Only an HTTP 400 — the API rejecting a
+ * variable — is worth retrying with the reduced set. A timeout or network
+ * failure is not: the smaller request would fail the same way.
+ */
+async function fetchOpenMeteo(latitude, longitude, options) {
   const buildUrl = hourly =>
     `${FORECAST_URL}?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}` +
     `&hourly=${hourly}&daily=${DAILY_PARAMS}&timezone=auto&timeformat=unixtime&forecast_days=7&past_days=3`;
@@ -198,19 +247,7 @@ export async function fetchWeatherData(latitude, longitude, options = {}) {
   for (const hourly of [HOURLY_PARAMS, HOURLY_PARAMS_FALLBACK]) {
     try {
       log.info('[weather] requesting hourly set', hourly);
-      const response = await fetchWithTimeout(buildUrl(hourly), {
-        timeoutMs: REQUEST_TIMEOUT_MS,
-        signal: options.signal,
-        fetchImpl: options.fetchImpl
-      });
-      if (!response.ok) {
-        const body = await safeReadText(response);
-        const message = `Weather API error ${response.status}: ${body}`;
-        throw response.status === 400 ? new ApiRejection(message) : new Error(message);
-      }
-      const data = await response.json();
-      writeCache(key, data);
-      return withProvenance(formatWeatherData(parseWeatherResponse(data)), data);
+      return await requestOpenMeteo(buildUrl(hourly), options);
     } catch (e) {
       if (!(e instanceof ApiRejection)) throw e;
       log.warn('[weather] API rejected the hourly set, trying the reduced one', e);
@@ -220,9 +257,109 @@ export async function fetchWeatherData(latitude, longitude, options = {}) {
   throw lastError;
 }
 
+/** One Open‑Meteo request, retried once on a 5xx. */
+async function requestOpenMeteo(url, options) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await fetchWithTimeout(url, {
+        timeoutMs: REQUEST_TIMEOUT_MS,
+        signal: options.signal,
+        fetchImpl: options.fetchImpl
+      });
+      if (!response.ok) {
+        const body = await safeReadText(response);
+        const message = `Weather API error ${response.status}: ${body}`;
+        if (response.status === 400) throw new ApiRejection(message);
+        if (response.status >= 500) throw new ServerError(message);
+        throw new Error(message);
+      }
+      return await response.json();
+    } catch (e) {
+      if (!(e instanceof ServerError) || attempt > 0) throw e;
+      log.warn('[weather] server error, retrying once', e);
+      await sleep(options.retryDelayMs ?? SERVER_ERROR_RETRY_MS, options.signal);
+    }
+  }
+}
+
+/**
+ * MET Norway, shaped like Open‑Meteo. The browser identifies the app to MET
+ * through the Origin header, as MET's terms require of JavaScript clients.
+ * A saved copy from the service worker keeps its stamp, so it still reads as
+ * offline data of its real age.
+ */
+async function fetchMetNorway(latitude, longitude, options) {
+  const response = await fetchWithTimeout(metForecastUrl(latitude, longitude), {
+    timeoutMs: FALLBACK_TIMEOUT_MS,
+    signal: options.signal,
+    fetchImpl: options.fetchImpl
+  });
+  if (!response.ok) throw new Error(`MET Norway error ${response.status}`);
+  const raw = await response.json();
+  const timeZone = recallTimeZone(latitude, longitude) || guessTimeZone(longitude);
+  const data = metToOpenMeteo(raw, { timeZone, latitude: Number(latitude), longitude: Number(longitude) });
+  if (data.hourly.time.length === 0) throw new Error('MET Norway returned no forecast');
+  if (typeof raw?.[SW_STAMP] === 'number') data[SW_STAMP] = raw[SW_STAMP];
+  return data;
+}
+
+/** setTimeout as a promise that a superseded request can cut short. */
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
+// ~11 km cells: time-zone borders are rarely that close, and nearby searches share an entry.
+const tzCell = (latitude, longitude) => `${Number(latitude).toFixed(1)},${Number(longitude).toFixed(1)}`;
+
+function readTimeZones() {
+  try {
+    const map = JSON.parse(localStorage.getItem(TZ_KEY) || '{}');
+    return map && typeof map === 'object' ? map : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Remember the zone Open‑Meteo reported, so the MET backup can use it later. */
+function rememberTimeZone(latitude, longitude, timeZone) {
+  if (typeof timeZone !== 'string' || !timeZone || timeZone === 'GMT') return;
+  try {
+    const map = readTimeZones();
+    const cell = tzCell(latitude, longitude);
+    if (map[cell] === timeZone) return;
+    delete map[cell];
+    map[cell] = timeZone;
+    // Insertion order is age order: drop the oldest beyond the cap.
+    const entries = Object.entries(map).slice(-MAX_TZ_ENTRIES);
+    localStorage.setItem(TZ_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // Storage unavailable — the backup falls back to a guessed zone.
+  }
+}
+
+function recallTimeZone(latitude, longitude) {
+  return readTimeZones()[tzCell(latitude, longitude)] || null;
+}
+
 /** Attach when the data was fetched, and whether it is an offline copy. */
 function withProvenance(weather, data) {
-  return { ...weather, fetchedAt: fetchedAtOf(data), offline: typeof data?.[SW_STAMP] === 'number' };
+  return {
+    ...weather,
+    fetchedAt: fetchedAtOf(data),
+    offline: typeof data?.[SW_STAMP] === 'number',
+    source: data?.w4bSource || 'open-meteo'
+  };
 }
 
 /**
@@ -320,7 +457,6 @@ export function parseWeatherResponse(data, now = new Date()) {
     visibility: getSafe(data.hourly?.visibility, idx),
     cloudCover: getSafe(data.hourly?.cloudcover, idx),
     uvIndex: getSafe(data.hourly?.uv_index, idx),
-    pressure: getSafe(data.hourly?.surface_pressure, idx),
     // Prefer the very top layer — that is what tyres touch. Fall back to the
     // next band down, which some models publish when the shallowest is absent.
     soilMoisture: getSafe(data.hourly?.soil_moisture_0_to_1cm, idx)
@@ -373,7 +509,6 @@ function emptyCurrent() {
     visibility: null,
     cloudCover: null,
     uvIndex: null,
-    pressure: null,
     soilMoisture: null,
     evapotranspiration: null
   };

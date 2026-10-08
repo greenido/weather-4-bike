@@ -1217,12 +1217,21 @@ function renderCurrent() {
 const FRESHNESS_OK = 'text-xs text-gray-500 dark:text-gray-400';
 const FRESHNESS_STALE = 'text-xs font-medium text-amber-700 dark:text-amber-300';
 
-/** How old the data really is — never the time the page happened to render. */
+const BACKUP_NOTE = 'Open-Meteo is unavailable, so this forecast is from MET Norway. ' +
+  'It has no visibility, soil moisture or past rain, gusts and chance of rain only in the Nordics, ' +
+  'and hourly detail for about 2.5 days.';
+
+/**
+ * How old the data really is — never the time the page happened to render —
+ * and whether it is the thinner backup forecast.
+ */
 function renderFreshness() {
   if (!el.currentUpdated || !state.weather) return;
   const { text, stale } = describeFreshness(state.weather.fetchedAt, Date.now(), { offline: state.weather.offline });
-  el.currentUpdated.textContent = text;
-  el.currentUpdated.className = stale ? FRESHNESS_STALE : FRESHNESS_OK;
+  const backup = state.weather.source === 'met.no';
+  el.currentUpdated.textContent = backup ? `${text} · Backup forecast (MET Norway)` : text;
+  el.currentUpdated.title = backup ? BACKUP_NOTE : '';
+  el.currentUpdated.className = stale || backup ? FRESHNESS_STALE : FRESHNESS_OK;
 }
 
 function sunLine() {

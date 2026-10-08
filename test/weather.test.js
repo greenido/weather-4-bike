@@ -7,7 +7,7 @@ import {
 import { scoreHourlySeries, findBestWindow } from '../js/insights.js';
 import { dayPrefix, formatClock, isNight } from '../js/time.js';
 import { TimeoutError } from '../js/net.js';
-import { inZone, VIEWER_ZONES } from './helpers.js';
+import { inZone, inZoneAsync, VIEWER_ZONES, metFixture } from './helpers.js';
 
 const TLV = 'Asia/Jerusalem';
 const HOUR = 3600;
@@ -201,12 +201,45 @@ function recordingFetch(...responses) {
   return { impl, calls };
 }
 
+/**
+ * A fetch that answers Open-Meteo and MET Norway from separate queues, so a
+ * test can say what each provider does and then check who was asked.
+ */
+function providers({ openMeteo = [], met = [] }) {
+  const calls = { openMeteo: [], met: [] };
+  const impl = async (url, init) => {
+    const name = url.startsWith('https://api.met.no/') ? 'met' : 'openMeteo';
+    const queue = name === 'met' ? met : openMeteo;
+    calls[name].push({ url, init });
+    const next = queue[Math.min(calls[name].length - 1, queue.length - 1)];
+    if (next === undefined) throw new Error(`unexpected ${name} request`);
+    if (typeof next === 'function') return next(url, init);
+    if (next instanceof Error) throw next;
+    return next;
+  };
+  return { impl, calls };
+}
+
+const hanging = (url, init) => new Promise((_, reject) => {
+  init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+});
+
+const opts = impl => ({ fetchImpl: impl, retryDelayMs: 0 });
+
 describe('fetchWeatherData — what is retried', () => {
   test('requests Unix timestamps', async () => {
     const { impl, calls } = recordingFetch(json(telAvivFixture()));
     await fetchWeatherData(32.08, 34.78, { fetchImpl: impl });
     assert.match(calls[0].url, /[?&]timeformat=unixtime(&|$)/);
     assert.match(calls[0].url, /[?&]timezone=auto(&|$)/);
+  });
+
+  test('does not ask for variables nothing reads — each one costs rate-limit quota', async () => {
+    const { impl, calls } = recordingFetch(json(telAvivFixture()));
+    await fetchWeatherData(32.08, 34.78, { fetchImpl: impl });
+    for (const unused of ['surface_pressure', 'apparent_temperature_max', 'uv_index_max', 'windgusts_10m_max']) {
+      assert.doesNotMatch(calls[0].url, new RegExp(unused), unused);
+    }
   });
 
   test('an API rejection (400) retries once with the reduced variable set', async () => {
@@ -216,53 +249,176 @@ describe('fetchWeatherData — what is retried', () => {
     assert.match(calls[0].url, /soil_moisture/);
     assert.doesNotMatch(calls[1].url, /soil_moisture/, 'second attempt uses the reduced set');
     assert.equal(w.timezone, TLV);
+    assert.equal(w.source, 'open-meteo');
   });
 
-  test('a network failure is not retried — the smaller request would fail the same way', async () => {
-    const { impl, calls } = recordingFetch(new TypeError('Failed to fetch'), json(telAvivFixture()));
-    await assert.rejects(fetchWeatherData(32.08, 34.78, { fetchImpl: impl }), TypeError);
-    assert.equal(calls.length, 1);
+  test('a server error (5xx) is retried once, and a recovery stays on Open-Meteo', async () => {
+    const { impl, calls } = providers({ openMeteo: [json({}, 503), json(telAvivFixture())] });
+    const w = await fetchWeatherData(32.08, 34.78, opts(impl));
+    assert.equal(calls.openMeteo.length, 2);
+    assert.equal(calls.met.length, 0);
+    assert.equal(w.source, 'open-meteo');
   });
 
-  test('a server error (5xx) is not retried either', async () => {
-    const { impl, calls } = recordingFetch(json({}, 503), json(telAvivFixture()));
-    await assert.rejects(fetchWeatherData(32.08, 34.78, { fetchImpl: impl }), /503/);
-    assert.equal(calls.length, 1);
+  test('a network failure does not retry the reduced set — it would fail the same way', async () => {
+    const { impl, calls } = providers({ openMeteo: [new TypeError('Failed to fetch')], met: [json(metFixture())] });
+    await fetchWeatherData(32.08, 34.78, opts(impl));
+    assert.equal(calls.openMeteo.length, 1);
+  });
+});
+
+describe('fetchWeatherData — MET Norway as the backup', () => {
+  test('a rate limit (429) goes straight to MET, without retrying a limit that resets by the minute', async () => {
+    const { impl, calls } = providers({ openMeteo: [json({ reason: 'Daily API request limit exceeded' }, 429)], met: [json(metFixture())] });
+    const w = await fetchWeatherData(32.08, 34.78, opts(impl));
+    assert.equal(calls.openMeteo.length, 1);
+    assert.equal(calls.met.length, 1);
+    assert.match(calls.met[0].url, /complete\?lat=32\.08&lon=34\.78$/);
+    assert.equal(w.source, 'met.no');
+    assert.equal(w.offline, false);
+    assert.equal(w.hourly.length, 62);
   });
 
-  test('two rejections surface the API’s reason', async () => {
-    const { impl } = recordingFetch(json({ reason: 'nope' }, 400));
-    await assert.rejects(fetchWeatherData(32.08, 34.78, { fetchImpl: impl }), /400/);
+  test('a server error that persists past the retry goes to MET', async () => {
+    const { impl, calls } = providers({ openMeteo: [json({}, 503)], met: [json(metFixture())] });
+    const w = await fetchWeatherData(32.08, 34.78, opts(impl));
+    assert.equal(calls.openMeteo.length, 2);
+    assert.equal(w.source, 'met.no');
+  });
+
+  test('Open-Meteo unreachable goes to MET', async () => {
+    const { impl } = providers({ openMeteo: [new TypeError('Failed to fetch')], met: [json(metFixture())] });
+    assert.equal((await fetchWeatherData(32.08, 34.78, opts(impl))).source, 'met.no');
+  });
+
+  test('two rejections (400) go to MET after trying the reduced set', async () => {
+    const { impl, calls } = providers({ openMeteo: [json({ reason: 'nope' }, 400)], met: [json(metFixture())] });
+    const w = await fetchWeatherData(32.08, 34.78, opts(impl));
+    assert.equal(calls.openMeteo.length, 2);
+    assert.equal(w.source, 'met.no');
+  });
+
+  test('when both fail, Open-Meteo’s error is the one reported', async () => {
+    const { impl } = providers({ openMeteo: [json({ reason: 'nope' }, 429)], met: [json({}, 500)] });
+    await assert.rejects(fetchWeatherData(32.08, 34.78, opts(impl)), /429/);
+  });
+
+  test('an empty MET answer counts as a failure, not as a blank forecast', async () => {
+    const empty = { properties: { timeseries: [] } };
+    const { impl } = providers({ openMeteo: [json({}, 429)], met: [json(empty)] });
+    await assert.rejects(fetchWeatherData(32.08, 34.78, opts(impl)), /429/);
+  });
+
+  test('a cancelled request never moves on to MET', async () => {
+    const controller = new AbortController();
+    const { impl, calls } = providers({ openMeteo: [hanging], met: [json(metFixture())] });
+    const pending = fetchWeatherData(32.08, 34.78, { ...opts(impl), signal: controller.signal });
+    controller.abort();
+    await assert.rejects(pending, err => err.name === 'AbortError');
+    assert.equal(calls.met.length, 0);
+  });
+
+  test('a cancel during the 5xx retry wait stops there', async () => {
+    const controller = new AbortController();
+    const { impl, calls } = providers({ openMeteo: [json({}, 503)], met: [json(metFixture())] });
+    const pending = fetchWeatherData(32.08, 34.78, { fetchImpl: impl, retryDelayMs: 60000, signal: controller.signal });
+    await new Promise(resolve => setImmediate(resolve));
+    controller.abort();
+    await assert.rejects(pending, err => err.name === 'AbortError');
+    assert.equal(calls.openMeteo.length, 1);
+    assert.equal(calls.met.length, 0);
+  });
+
+  test('uses the time zone Open-Meteo reported for this place earlier, not a guess', async (t) => {
+    const store = new Map();
+    globalThis.localStorage = {
+      getItem: k => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: k => store.delete(k)
+    };
+    t.after(() => { delete globalThis.localStorage; });
+
+    await inZoneAsync('America/Los_Angeles', async () => {
+      const first = providers({ openMeteo: [json(telAvivFixture())] });
+      await fetchWeatherData(32.08, 34.78, opts(first.impl));
+
+      const later = providers({ openMeteo: [json({}, 429)], met: [json(metFixture())] });
+      const w = await fetchWeatherData(32.08, 34.78, { ...opts(later.impl), force: true });
+      assert.equal(w.source, 'met.no');
+      assert.equal(w.timezone, TLV);
+    });
+  });
+
+  test('without a remembered zone, a faraway place gets a solar-offset zone', async () => {
+    await inZoneAsync('America/Los_Angeles', async () => {
+      const { impl } = providers({ openMeteo: [json({}, 429)], met: [json(metFixture())] });
+      const w = await fetchWeatherData(32.08, 34.78, opts(impl));
+      assert.equal(w.timezone, 'Etc/GMT-2');
+    });
+  });
+});
+
+describe('fetchWeatherData — reusing a backup forecast', () => {
+  function fakeSessionStorage(t) {
+    const store = new Map();
+    globalThis.sessionStorage = {
+      getItem: k => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: k => store.delete(k),
+      key: i => [...store.keys()][i] ?? null,
+      get length() { return store.size; }
+    };
+    t.after(() => { delete globalThis.sessionStorage; });
+  }
+
+  test('reused for two minutes, then Open-Meteo gets another try', async (t) => {
+    fakeSessionStorage(t);
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-11T03:20:00Z') });
+
+    const down = providers({ openMeteo: [json({}, 429)], met: [json(metFixture())] });
+    assert.equal((await fetchWeatherData(32.08, 34.78, opts(down.impl))).source, 'met.no');
+
+    t.mock.timers.tick(90 * 1000);
+    const soon = providers({});
+    assert.equal((await fetchWeatherData(32.08, 34.78, opts(soon.impl))).source, 'met.no');
+    assert.equal(soon.calls.openMeteo.length + soon.calls.met.length, 0, 'served from the cache');
+
+    t.mock.timers.tick(60 * 1000);
+    const recovered = providers({ openMeteo: [json(telAvivFixture())] });
+    assert.equal((await fetchWeatherData(32.08, 34.78, opts(recovered.impl))).source, 'open-meteo');
+    assert.equal(recovered.calls.openMeteo.length, 1);
   });
 });
 
 describe('fetchWeatherData — deadlines and cancellation', () => {
-  test('gives up after 15 s, once, instead of waiting forever and then again', async (t) => {
+  test('Open-Meteo gets 15 s, then MET a shorter 8 s; the reduced set is never tried', async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
-    const calls = [];
-    const hanging = (url, init) => new Promise((_, reject) => {
-      calls.push(url);
-      init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
-    });
+    const { impl, calls } = providers({ openMeteo: [hanging], met: [hanging] });
+    const flush = () => new Promise(resolve => setImmediate(resolve));
 
-    const pending = fetchWeatherData(32.08, 34.78, { fetchImpl: hanging });
+    const pending = fetchWeatherData(32.08, 34.78, { fetchImpl: impl });
     let settled = false;
     pending.catch(() => {}).finally(() => { settled = true; });
 
     t.mock.timers.tick(14999);
-    await Promise.resolve();
-    assert.equal(settled, false, 'still waiting just before the deadline');
+    await flush();
+    assert.equal(calls.met.length, 0, 'still waiting on Open-Meteo just before its deadline');
+
+    t.mock.timers.tick(1);
+    await flush();
+    assert.equal(calls.met.length, 1, 'MET asked once Open-Meteo timed out');
+
+    t.mock.timers.tick(7999);
+    await flush();
+    assert.equal(settled, false, 'still waiting on MET just before its deadline');
 
     t.mock.timers.tick(1);
     await assert.rejects(pending, TimeoutError);
-    assert.equal(calls.length, 1, 'a timeout is not retried with the reduced set');
+    assert.equal(calls.openMeteo.length, 1, 'a timeout is not retried with the reduced set');
   });
 
   test('a superseded request is cancelled with the caller’s signal', async () => {
     const controller = new AbortController();
-    const hanging = (url, init) => new Promise((_, reject) => {
-      init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
-    });
     const pending = fetchWeatherData(32.08, 34.78, { fetchImpl: hanging, signal: controller.signal });
     controller.abort();
     await assert.rejects(pending, err => err.name === 'AbortError');
@@ -284,5 +440,14 @@ describe('fetchWeatherData — how old is this data?', () => {
     const w = await fetchWeatherData(32.08, 34.78, { fetchImpl: impl });
     assert.equal(w.offline, true);
     assert.equal(w.fetchedAt, savedAt, 'not the time it happened to be rendered');
+  });
+
+  test('a saved MET copy keeps its stamp too', async () => {
+    const savedAt = Date.parse('2026-09-09T10:00:00Z');
+    const { impl } = providers({ openMeteo: [json({}, 429)], met: [json({ ...metFixture(), w4bFetchedAt: savedAt })] });
+    const w = await fetchWeatherData(32.08, 34.78, opts(impl));
+    assert.equal(w.source, 'met.no');
+    assert.equal(w.offline, true);
+    assert.equal(w.fetchedAt, savedAt);
   });
 });

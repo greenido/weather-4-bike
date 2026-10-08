@@ -28,6 +28,7 @@ const HASHED_FILES = [
   'styles/output.css',
   'js/app.js',
   'js/weather.js',
+  'js/metno.js',
   'js/insights.js',
   'js/location.js',
   'js/units.js',
