@@ -4,12 +4,14 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 
 ## Features
 
-- **"When should I ride?"** — scores every hour of the week and finds the best contiguous window of daylight, for the ride length you choose. Shows today's best and flags when later in the week is better
+- **Verdict first** — the first screen answers "should I ride now, and when?": a ride-now score for your discipline, then the best window. The full readings sit one tap away. On desktop the decision and the reasons sit side by side
+- **"When should I ride?"** — scores every hour of the week and finds the best contiguous window of daylight, for the ride length you choose. Shows the best window in the next day — preferring a sooner one when it is within half a point — and flags when later in the week is better
 - **Route-aware wind** — pick which way you head out and it scores the outbound and return legs separately, then tells you which direction to start in
 - **Score your GPX routes** — one tap opens [Bike Route Weather](https://greenido.github.io/weather-bike-routes/) on the recommended window and your speed, to get wind and temperature along every stretch of a real route. The link carries `?start=` (an ISO instant) and `?speed=` (km/h); without a speed, that app reads your `w4b:ridingSpeed` setting, since both apps share the `greenido.github.io` origin
 - **Real surface conditions** — gravel and MTB scores use the model's soil moisture, not a rainfall total, so it knows a trail has already dried
 - **Wind chill at riding speed** — what it actually feels like at 28 km/h, not standing still
-- **Compare locations** — score your saved spots side by side and see where the riding is best
+- **Where & when should I ride?** — star the places you ride; each is ranked by its best window this week (for your discipline and ride length), with a places × days grid on desktop and a ranked list on a phone. Tap a place to open it
+- **Share a ride** — sends a link that opens on the same place, discipline, ride length and start time, scored against the forecast your friend sees. The ride travels in the URL fragment, which never reaches a server or the page's analytics, and coordinates are rounded to ~1 km
 - **Calibrated to you** — set your own comfortable temperature range and typical speed
 - Rideability score (1–10) per discipline, with a transparent penalty breakdown
 - Rain timing ("dry until 2pm" / "clearing around 4pm") rather than just a daily percentage
@@ -18,12 +20,13 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 - Sunrise/sunset, wind gusts, feels-like temperature, and AQI
 - Hourly strip colour-coded by rideability; 7-day outlook with a temperature chart
 - Point at any hour on the "When should I ride?" chart for its temperature, feels-like, wind, gusts and rain — hover, tap, or drag a finger along it
-- Geolocation first, city search fallback, recent locations
+- Geolocation first, city search fallback, recent locations — all in one location sheet behind the header's location button (a bottom sheet on a phone)
+- A four-control header at every size: location, refresh, settings, help. Units, theme, comfort range and riding speed live together in **Settings**
 - Full metric/imperial switching (°C·km/h·km ↔ °F·mph·mi), persisted
 - Every time is shown on the forecast location's clock — check Tel Aviv from California and "now" is Tel Aviv's now
 - Installable PWA with offline support that works on a *bad* connection, not only a dead one, and says how old a saved forecast is
-- Follows your system theme by default; a header toggle overrides it and is remembered. Applied before first paint, so no flash
-- Mobile-first, keyboard accessible
+- Follows your system theme by default; Settings → Theme overrides it (System / Light / Dark) and is remembered. Applied before first paint, so no flash
+- Mobile-first, keyboard accessible. The Road / Gravel / MTB switch stays pinned to the top while you scroll, since it re-scores everything
 
 ## Run locally
 
@@ -59,12 +62,12 @@ Tailwind runs in `darkMode: 'class'`, so the theme lives on `<html class="dark">
 
 There are two sources of truth, in priority order:
 
-1. **An explicit choice**, stored under `w4b:theme`. Written only when the rider clicks the toggle.
+1. **An explicit choice**, stored under `w4b:theme`. Written only when the rider picks Light or Dark in Settings.
 2. **The OS setting**, via `prefers-color-scheme`. Used whenever nothing is stored — which is also the default for a first-time visitor. While in this mode the page tracks live OS changes, so flipping your system theme updates an already-open tab.
 
 The theme is applied by a small **blocking** script in `<head>`. It has to be blocking: `js/app.js` is a deferred module, so applying the theme there would render one frame in the wrong theme. If you change `THEME_KEY` or `systemTheme()` in `js/app.js`, update that inline script to match — it deliberately duplicates that logic.
 
-There is no "reset to system" control; clearing `w4b:theme` in devtools returns to following the OS.
+Picking **System** in Settings removes `w4b:theme`, which returns to following the OS.
 
 > Colour classes used at runtime (score tiers, activity tabs) are written as **complete literal strings** in the lookup tables at the top of `js/app.js`. Tailwind's scanner cannot see a class name assembled by concatenation, so never build one with string interpolation.
 
@@ -76,7 +79,7 @@ Everything outside `app.js` is pure and dependency-free, so it is directly testa
 npm test
 ```
 
-161 tests cover the penalty model, unknown-vs-zero handling, hard hazard ceilings, per-discipline weighting, the best-window search, rain timing, unit conversion, time zones, request races and timeouts, and the service worker.
+187 tests cover the penalty model, unknown-vs-zero handling, hard hazard ceilings, per-discipline weighting, the best-window search, rain timing, unit conversion, time zones, request races and timeouts, the service worker, saved places, multi-place planning and share links.
 
 - **Time-zone tests run under several process zones** (`inZone` in `test/helpers.js`). The time-zone bug only exists when the viewer's zone differs from the location's, and CI runs in UTC — a test that just runs "normally" passes while the app is wrong for everyone else.
 - **`sw.js` is tested as shipped.** It is a classic worker script, not a module, so `test/sw.test.js` runs the real file in a Node VM with fake `caches` and `fetch`.
