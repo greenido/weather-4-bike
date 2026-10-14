@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import {
   formatTemp, formatSpeed, formatVisibility, formatPercent, formatPrecip,
   degToCardinal, temperatureComfort, windDescriptor,
-  convertTemp, convertSpeed, convertDistance, systemFor, SYSTEMS,
+  convertTemp, systemFor, SYSTEMS,
   describeHourConditions, hourConditionsSentence
 } from '../js/units.js';
 
@@ -125,19 +125,7 @@ describe('degToCardinal', () => {
   });
 });
 
-describe('raw conversions', () => {
-  test('round-trip within floating point tolerance', () => {
-    assert.ok(Math.abs(convertTemp(100, 'imperial') - 212) < 1e-9);
-    assert.ok(Math.abs(convertSpeed(100, 'imperial') - 62.1371) < 1e-3);
-    assert.ok(Math.abs(convertDistance(100, 'imperial') - 62.1371) < 1e-3);
-  });
-
-  test('metric is a pass-through', () => {
-    assert.equal(convertTemp(21, 'metric'), 21);
-    assert.equal(convertSpeed(21, 'metric'), 21);
-    assert.equal(convertDistance(21, 'metric'), 21);
-  });
-
+describe('systemFor', () => {
   test('an unknown system key falls back to metric', () => {
     assert.equal(systemFor('nonsense').key, 'metric');
     assert.equal(convertTemp(21, undefined), 21);

@@ -8,7 +8,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import vm from 'node:vm';
 
 import { deferred } from './helpers.js';
@@ -223,9 +223,15 @@ describe('sw.js — shell', () => {
     assert.deepEqual(seen, ['no-cache']);
   });
 
-  test('precaches the new modules, so the offline app can start', () => {
-    for (const file of ['js/time.js', 'js/net.js', 'js/routes.js', 'js/plan.js']) {
-      assert.ok(SOURCE.includes(`'${file}'`), `${file} is in SHELL_ASSETS`);
+  test('every module is precached and hashed into the version', () => {
+    // Missing from SHELL_ASSETS, the offline app cannot start. Missing from the
+    // stamp script, changing that file does not invalidate the cached shell.
+    const stampSource = readFileSync(new URL('../scripts/stamp-sw.js', import.meta.url), 'utf8');
+    const modules = readdirSync(new URL('../js/', import.meta.url)).filter(f => f.endsWith('.js'));
+    assert.ok(modules.length >= 10);
+    for (const file of modules) {
+      assert.ok(SOURCE.includes(`'js/${file}'`), `js/${file} is in SHELL_ASSETS (sw.js)`);
+      assert.ok(stampSource.includes(`'js/${file}'`), `js/${file} is in HASHED_FILES (scripts/stamp-sw.js)`);
     }
   });
 });

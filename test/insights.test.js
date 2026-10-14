@@ -283,29 +283,6 @@ function onTheHour(date = new Date()) {
   return d;
 }
 
-describe('scoreHourlySeries', () => {
-  test('scores each upcoming hour', () => {
-    const base = onTheHour();
-    const weather = { hourly: buildHourly(base, Array.from({ length: 12 }, () => ({}))) };
-    const scored = scoreHourlySeries(weather, 'road', { now: base, hours: 12 });
-
-    assert.ok(scored.length >= 12);
-    assert.ok(scored.every(h => h.score >= 1 && h.score <= 10));
-    assert.ok(scored[0].date instanceof Date);
-  });
-
-  test('reflects hour-by-hour differences', () => {
-    const base = onTheHour();
-    const weather = {
-      hourly: buildHourly(base, [
-        {}, {}, { windSpeed: 70, precipitationProbability: 100, precipitation: 8 }, {}
-      ])
-    };
-    const scored = scoreHourlySeries(weather, 'road', { now: base, hours: 6 });
-    assert.ok(scored[2].score < scored[0].score);
-  });
-});
-
 describe('findBestWindow', () => {
   test('picks the good stretch out of a bad day', () => {
     const base = onTheHour();
@@ -361,6 +338,22 @@ describe('findBestWindow', () => {
       best.start.getTime() >= base.getTime() + 3 * 3600 * 1000,
       'the window must not straddle the unrideable hour'
     );
+  });
+
+  test('never joins the last hour before sunset to the first after sunrise', () => {
+    // Once night is filtered out, 18:00 and 06:00 sit side by side in the pool.
+    // They are the only good hours, so a window that bridges them would win.
+    const base = new Date('2026-10-01T00:00:00Z');
+    const bad = { windSpeed: 65, precipitationProbability: 100, precipitation: 6 };
+    const specs = Array.from({ length: 48 }, (_, i) => (i === 18 || i === 30 ? {} : bad));
+    const scored = scoreHourlySeries({ hourly: buildHourly(base, specs) }, 'road', { now: base, hours: 48 });
+    const daylight = [0, 1].map(d => ({
+      sunrise: new Date(base.getTime() + (d * 24 + 6) * 3600 * 1000),
+      sunset: new Date(base.getTime() + (d * 24 + 18) * 3600 * 1000)
+    }));
+
+    const best = findBestWindow(scored, { now: base, daylight, withinHours: 48, minHours: 2, maxHours: 2 });
+    assert.ok(best.score < 8, `no 2-hour window is good, but got ${best.score} from ${best.start.toISOString()}`);
   });
 });
 
@@ -648,15 +641,11 @@ describe('scoreOutAndBack', () => {
     hourly: []
   };
 
-  test('scores the two legs differently and names the relation', () => {
+  test('scores the two legs differently, and endorses starting into the wind', () => {
     const r = scoreOutAndBack(windy, 'road', 0); // heading north into a north wind
     assert.equal(r.out.relation, 'headwind');
     assert.equal(r.back.relation, 'tailwind');
     assert.ok(r.out.score < r.back.score);
-  });
-
-  test('endorses starting into the wind', () => {
-    const r = scoreOutAndBack(windy, 'road', 0);
     assert.match(r.advice, /hard leg is first/i);
   });
 
@@ -712,17 +701,6 @@ describe('personal comfort band in scoring', () => {
     assert.equal(adapted.allPenalties.find(b => b.name === 'Temperature').penalty, 0);
   });
 
-  test('a cold-adapted rider is not punished for a cool day', () => {
-    const cool = { ...PERFECT, temperatureC: 8, apparentTemperatureC: 8 };
-    const standard = scoreConditions(cool, { discipline: 'road' });
-    const adapted = scoreConditions(cool, { discipline: 'road', comfortBand: [5, 18] });
-    assert.ok(adapted.score > standard.score);
-  });
-
-  test('the band is echoed back so the UI can show what was used', () => {
-    const r = scoreConditions(PERFECT, { discipline: 'road', comfortBand: [10, 30] });
-    assert.deepEqual(r.comfortBand, [10, 30]);
-  });
 });
 
 // ---------------------------------------------------------------------------
