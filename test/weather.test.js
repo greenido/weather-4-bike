@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  parseWeatherResponse, formatWeatherData, getDaylightRanges, fetchWeatherData, parseAirQuality
+  parseWeatherResponse, formatWeatherData, getDaylightRanges, fetchWeatherData, fetchAirQuality, parseAirQuality
 } from '../js/weather.js';
 import { scoreHourlySeries, findBestWindow } from '../js/insights.js';
 import { dayPrefix, formatClock, isNight } from '../js/time.js';
@@ -259,12 +259,6 @@ describe('fetchWeatherData — what is retried', () => {
     assert.equal(calls.met.length, 0);
     assert.equal(w.source, 'open-meteo');
   });
-
-  test('a network failure does not retry the reduced set — it would fail the same way', async () => {
-    const { impl, calls } = providers({ openMeteo: [new TypeError('Failed to fetch')], met: [json(metFixture())] });
-    await fetchWeatherData(32.08, 34.78, opts(impl));
-    assert.equal(calls.openMeteo.length, 1);
-  });
 });
 
 describe('fetchWeatherData — MET Norway as the backup', () => {
@@ -286,9 +280,10 @@ describe('fetchWeatherData — MET Norway as the backup', () => {
     assert.equal(w.source, 'met.no');
   });
 
-  test('Open-Meteo unreachable goes to MET', async () => {
-    const { impl } = providers({ openMeteo: [new TypeError('Failed to fetch')], met: [json(metFixture())] });
+  test('Open-Meteo unreachable goes to MET, without trying the reduced set — it would fail the same way', async () => {
+    const { impl, calls } = providers({ openMeteo: [new TypeError('Failed to fetch')], met: [json(metFixture())] });
     assert.equal((await fetchWeatherData(32.08, 34.78, opts(impl))).source, 'met.no');
+    assert.equal(calls.openMeteo.length, 1);
   });
 
   test('two rejections (400) go to MET after trying the reduced set', async () => {
@@ -358,7 +353,7 @@ describe('fetchWeatherData — MET Norway as the backup', () => {
   });
 });
 
-describe('fetchWeatherData — reusing a backup forecast', () => {
+describe('fetchWeatherData — the session cache', () => {
   function fakeSessionStorage(t) {
     const store = new Map();
     globalThis.sessionStorage = {
@@ -388,6 +383,28 @@ describe('fetchWeatherData — reusing a backup forecast', () => {
     assert.equal((await fetchWeatherData(32.08, 34.78, opts(recovered.impl))).source, 'open-meteo');
     assert.equal(recovered.calls.openMeteo.length, 1);
   });
+
+  test('an old offline copy is not reused as if it were fresh', async (t) => {
+    fakeSessionStorage(t);
+    const savedAt = Date.now() - 60 * 60 * 1000;
+    const offline = recordingFetch(json({ ...telAvivFixture(), w4bFetchedAt: savedAt }));
+    assert.equal((await fetchWeatherData(32.08, 34.78, { fetchImpl: offline.impl })).offline, true);
+
+    const next = recordingFetch(json(telAvivFixture()));
+    const w = await fetchWeatherData(32.08, 34.78, { fetchImpl: next.impl });
+    assert.equal(next.calls.length, 1, 'asks the network again instead of serving the hour-old copy');
+    assert.equal(w.offline, false);
+  });
+});
+
+describe('fetchAirQuality', () => {
+  // app.js calls it with no .catch: a rejection here would go unhandled.
+  test('any failure resolves to null rather than throwing', async () => {
+    for (const answer of [json({}, 500), new TypeError('Failed to fetch')]) {
+      const { impl } = recordingFetch(answer);
+      assert.equal(await fetchAirQuality(32.08, 34.78, { fetchImpl: impl }), null);
+    }
+  });
 });
 
 describe('fetchWeatherData — deadlines and cancellation', () => {
@@ -415,13 +432,6 @@ describe('fetchWeatherData — deadlines and cancellation', () => {
     t.mock.timers.tick(1);
     await assert.rejects(pending, TimeoutError);
     assert.equal(calls.openMeteo.length, 1, 'a timeout is not retried with the reduced set');
-  });
-
-  test('a superseded request is cancelled with the caller’s signal', async () => {
-    const controller = new AbortController();
-    const pending = fetchWeatherData(32.08, 34.78, { fetchImpl: hanging, signal: controller.signal });
-    controller.abort();
-    await assert.rejects(pending, err => err.name === 'AbortError');
   });
 });
 

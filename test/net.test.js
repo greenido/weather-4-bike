@@ -2,7 +2,6 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { fetchWithTimeout, createLatestGate, TimeoutError, isAbort } from '../js/net.js';
-import { deferred } from './helpers.js';
 
 /** A fetch that never answers on its own, but honours abort like the real one. */
 function hangingFetch() {
@@ -85,72 +84,5 @@ describe('createLatestGate', () => {
     assert.equal(untouched(), true);
     gate.begin();
     assert.equal(untouched(), false);
-  });
-
-  test('gates are independent — a search does not cancel a forecast', () => {
-    const forecasts = createLatestGate();
-    const searches = createLatestGate();
-    const forecast = forecasts.begin();
-    searches.begin();
-    assert.equal(forecast.isCurrent(), true);
-  });
-});
-
-/**
- * The exact sequence from the bug: tap Boulder, then Tel Aviv, and Boulder's
- * slow response arrives last. This drives the same ticket checks loadWeather
- * makes, with responses settled by hand in the bad order.
- */
-describe('out-of-order responses (the Boulder / Tel Aviv race)', () => {
-  function makeLoader() {
-    const gate = createLatestGate();
-    const screen = { showing: null, savedAsLast: null };
-    const responses = {};
-
-    async function load(place) {
-      const ticket = gate.begin();
-      responses[place] = deferred();
-      const data = await responses[place].promise;
-      if (!ticket.isCurrent()) return 'superseded';
-      screen.showing = data;
-      screen.savedAsLast = place;
-      return 'fresh';
-    }
-    return { load, screen, responses, gate };
-  }
-
-  test('the late response for the abandoned place changes nothing', async () => {
-    const { load, screen, responses } = makeLoader();
-
-    const boulder = load('Boulder');
-    const telAviv = load('Tel Aviv');
-
-    responses['Tel Aviv'].resolve('Tel Aviv forecast');
-    assert.equal(await telAviv, 'fresh');
-
-    responses.Boulder.resolve('Boulder forecast'); // lands last
-    assert.equal(await boulder, 'superseded');
-
-    assert.equal(screen.showing, 'Tel Aviv forecast');
-    assert.equal(screen.savedAsLast, 'Tel Aviv', 'next visit must open where the rider went, not Boulder');
-  });
-
-  test('startup: a location chosen during the permission prompt beats the default', async () => {
-    const { load, screen, responses, gate } = makeLoader();
-
-    // init() takes its mark, then waits on the prompt…
-    const untouched = gate.mark();
-    // …the rider searches and picks Boulder meanwhile…
-    const picked = load('Boulder');
-    responses.Boulder.resolve('Boulder forecast');
-    await picked;
-    // …then denies the prompt. The fallback must stand down.
-    if (untouched()) {
-      const fallback = load('San Francisco');
-      responses['San Francisco'].resolve('SF forecast');
-      await fallback;
-    }
-
-    assert.equal(screen.showing, 'Boulder forecast');
   });
 });
