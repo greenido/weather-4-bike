@@ -138,3 +138,23 @@ export function describeFreshness(fetchedAtMs, nowMs, options = {}) {
   }
   return { text: `Updated ${age}`, stale: minutes >= 60 };
 }
+
+/**
+ * Goal: Decide whether a forecast on screen should be re-fetched as the rider
+ *       comes back to the app.
+ * Why: An installed app can sit in the background for hours and resume with a
+ *      "Ride now" verdict for a morning that has passed. The age label counted
+ *      up, but nothing reloaded the data.
+ * How: Refresh once the data is older than `maxAgeMs`, but try at most once per
+ *      `retryMs`, so flicking between apps on a dead connection does not
+ *      start a request every time.
+ *
+ * @param {number} fetchedAtMs - when the data left the API
+ * @param {number|null} lastTryMs - when a refresh was last attempted
+ * @param {number} nowMs
+ */
+export function shouldRefresh(fetchedAtMs, lastTryMs, nowMs, { maxAgeMs = 10 * 60000, retryMs = 60000 } = {}) {
+  if (typeof fetchedAtMs !== 'number' || !Number.isFinite(fetchedAtMs)) return false;
+  if (nowMs - fetchedAtMs < maxAgeMs) return false;
+  return !(typeof lastTryMs === 'number' && nowMs - lastTryMs < retryMs);
+}
