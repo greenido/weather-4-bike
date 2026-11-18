@@ -22,7 +22,8 @@ import { fetchWeatherData, fetchAirQuality, getDaylightRanges, clearWeatherCache
 import {
   getCurrentLocation, searchCities, saveRecentLocation, getRecentLocations,
   clearRecentLocations, reverseGeocode, setLastLocation, getLastLocation,
-  getSavedPlaces, isSavedPlace, toggleSavedPlace, placeKey
+  getSavedPlaces, isSavedPlace, toggleSavedPlace, placeKey,
+  formatLocationName, trimLocationText, locationSubtitle
 } from './location.js';
 import {
   DISCIPLINES, scoreCurrent, scoreHourlySeries, findBestWindow, findHeadlineWindow, findRainTiming,
@@ -38,6 +39,8 @@ import { formatClock as clockAt, dayPrefix, formatWeekday, isNight, describeFres
 import { createLatestGate, isAbort } from './net.js';
 import { bikeRoutesUrl } from './routes.js';
 import { planPlace, rankPlans, scoreWindowAt, shareHash, parseShareHash } from './plan.js';
+import { rideEvent, googleCalendarUrl } from './calendar.js';
+import { iconCandidates } from './icons.js';
 
 // One gate per kind of request: only the newest may change the screen.
 const loadGate = createLatestGate();
@@ -938,12 +941,6 @@ async function chooseCity(city) {
   await loadWeather(city);
 }
 
-function locationSubtitle(loc) {
-  const parts = [loc.region, loc.country].filter(Boolean);
-  const coords = `${Number(loc.latitude).toFixed(2)}, ${Number(loc.longitude).toFixed(2)}`;
-  return parts.length ? `${parts.join(', ')} · ${coords}` : coords;
-}
-
 // --- Saved and recent places, in the location sheet --------------------------
 
 function renderPlaces() {
@@ -1319,6 +1316,7 @@ function renderBestWindow() {
           ${week.tier.emoji} ${week.score}/10 · ${escapeHtml(week.tier.label)}
         </span>
       </div>
+      ${best ? WEEK_CALENDAR_LINK : ''}
     </div>` : '';
 
   const shared = sharedRideCard(scored);
@@ -1332,9 +1330,9 @@ function renderBestWindow() {
         <div class="text-sm text-gray-600 dark:text-gray-300 mt-2">${rainLine}</div>
       </div>
       ${week ? weekCard : ''}
-      ${week ? SHARE_BUTTON : ''}`;
+      ${week ? RIDE_ACTIONS : ''}`;
     rideChart = null;
-    wireShareButton(week);
+    wireRideActions(week);
     renderRoutesCta(week?.start);
     return;
   }
@@ -1357,28 +1355,76 @@ function renderBestWindow() {
         </div>
       </div>
       ${sparkline}
-      ${SHARE_BUTTON}
+      ${RIDE_ACTIONS}
     </div>
     ${weekCard}`;
-  wireShareButton(best);
+  wireRideActions(best);
+  if (weekIsBetter) wireCalendarLink(el.bestWindow.querySelector('[data-add-calendar-week]'), week);
 
   // A keyboard user starts on the first hour of the recommended window.
   wireRideChart(chartHours, chartHours.findIndex(h => h.date.getTime() === best.start.getTime()));
   renderRoutesCta(best.start);
 }
 
-// --- Sharing a ride ---------------------------------------------------------
+// --- Sharing a ride, and putting it in a calendar ----------------------------
 
-const SHARE_BUTTON = `
-  <div class="mt-3 flex justify-end">
+const CALENDAR_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M12 14v4M10 16h4"/></svg>';
+
+const RIDE_ACTIONS = `
+  <div class="mt-3 flex flex-wrap justify-end gap-2">
+    <a data-add-calendar target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/70 dark:bg-gray-800/70 px-3 py-1.5 text-sm font-medium hover:bg-white dark:hover:bg-gray-700 transition-colors">
+      ${CALENDAR_ICON}
+      Add to Google Calendar<span class="sr-only"> (opens in a new tab)</span>
+    </a>
     <button data-share-ride class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/70 dark:bg-gray-800/70 px-3 py-1.5 text-sm font-medium hover:bg-white dark:hover:bg-gray-700 transition-colors">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" aria-hidden="true"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/></svg>
       Share this ride
     </button>
   </div>`;
 
-function wireShareButton(ride) {
+// The later-this-week ride, when today's window is the headline. A text link,
+// so the week card stays secondary to the card above it.
+const WEEK_CALENDAR_LINK = `
+  <div class="mt-2 flex justify-end">
+    <a data-add-calendar-week target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 text-sm font-medium text-blue-700 dark:text-blue-300 hover:underline">
+      ${CALENDAR_ICON}
+      Add this one to Google Calendar<span class="sr-only"> (opens in a new tab)</span>
+    </a>
+  </div>`;
+
+function wireRideActions(ride) {
   el.bestWindow.querySelector('[data-share-ride]')?.addEventListener('click', () => shareRide(ride));
+  wireCalendarLink(el.bestWindow.querySelector('[data-add-calendar]'), ride);
+}
+
+/** Point a calendar link at `ride`, or drop it when the ride cannot become an event. */
+function wireCalendarLink(link, ride) {
+  if (!link) return;
+  const href = rideCalendarUrl(ride);
+  if (href) link.href = href;
+  else link.remove();
+}
+
+/** A link back to this app, opened on `ride`. See js/plan.js. */
+function rideLink(ride) {
+  return `${window.location.origin}${window.location.pathname}${shareHash({
+    place: state.location, activity: state.activity, hours: ride.hours, start: ride.start
+  })}`;
+}
+
+/**
+ * Goal: Keep the afternoon free for the ride the app recommends.
+ * Why: A window is only useful if it is still free when it comes round.
+ * How: A pre-filled Google Calendar event (js/calendar.js) that links back
+ *      here, so the rider can check the forecast again before setting off.
+ */
+function rideCalendarUrl(ride) {
+  if (!state.location || !ride) return null;
+  return googleCalendarUrl(rideEvent(ride, {
+    activityLabel: DISCIPLINES[state.activity].label,
+    placeName: trimLocationText(formatLocationName(state.location)),
+    link: rideLink(ride)
+  }));
 }
 
 /**
@@ -1390,9 +1436,7 @@ function wireShareButton(ride) {
  */
 async function shareRide(ride) {
   if (!state.location || !ride) return;
-  const url = `${window.location.origin}${window.location.pathname}${shareHash({
-    place: state.location, activity: state.activity, hours: ride.hours, start: ride.start
-  })}`;
+  const url = rideLink(ride);
   const text = `${DISCIPLINES[state.activity].label} ride in ${state.location.name}: ${formatDayPrefix(ride.start) || 'Today '}${formatClock(ride.start)} – ${formatClock(ride.end)}, ${ride.score}/10`;
   try {
     if (navigator.share) {
@@ -1987,53 +2031,6 @@ function initScenicImage() {
 // Weather icons
 // ---------------------------------------------------------------------------
 
-const ICON_DIR = 'assets/icons/weather2/static';
-
-const ICON_BY_CODE = {
-  0: 'sun',
-  1: 'sun-cloud', 2: 'sun-cloud',
-  3: 'cloud',
-  45: 'fog', 48: 'fog',
-  51: 'drizzle', 53: 'drizzle', 55: 'drizzle', 56: 'drizzle', 57: 'drizzle',
-  61: 'rain', 63: 'rain', 65: 'rain', 80: 'rain', 81: 'rain', 82: 'rain',
-  // This icon pack ships no sleet/freezing-rain glyph, so point the freezing
-  // codes straight at the rain-snow mix rather than requesting a known 404.
-  // Drop a `sleet.svg` into the pack and change these two lines to use it.
-  66: 'snowy-4', 67: 'snowy-4',
-  71: 'snow', 73: 'snow', 75: 'snow', 77: 'snow', 85: 'snow', 86: 'snow',
-  95: 'storm', 96: 'storm', 99: 'storm'
-};
-
-const ICON_NIGHT = { sun: 'night', 'sun-cloud': 'cloudy-night-1', cloud: 'cloudy-night-2' };
-
-/**
- * Fallbacks are exact file names that exist in the icon pack. The pack has no
- * `sleet.svg`, which is why freezing-rain codes used to render as a broken image.
- */
-const ICON_FALLBACKS = {
-  sun: ['sun-cloud', 'cloud'],
-  'sun-cloud': ['cloudy-day-2', 'sun', 'cloud'],
-  cloud: ['cloudy-day-3', 'sun-cloud'],
-  fog: ['haze', 'cloud'],
-  drizzle: ['rainy-4', 'rain', 'cloud'],
-  rain: ['rain-2', 'rainy-2', 'drizzle', 'cloud'],
-  'snowy-4': ['rainy-5', 'rain', 'cloud'],
-  snow: ['snowy-1', 'snowy-2', 'snowy-4', 'cloud'],
-  storm: ['rainy-3', 'rain', 'cloud'],
-  night: ['cloudy-night-1', 'cloud'],
-  'cloudy-night-1': ['cloudy-night-2', 'cloud'],
-  'cloudy-night-2': ['cloudy-night-3', 'cloud']
-};
-
-function iconCandidates(code, night = false) {
-  const day = ICON_BY_CODE[code] || 'cloud';
-  const base = night && ICON_NIGHT[day] ? ICON_NIGHT[day] : day;
-  // Exact-key lookup. The old code used `baseName.includes(key)`, so 'sun-cloud'
-  // matched the 'sun' entry first and inherited the wrong fallback list.
-  const alts = ICON_FALLBACKS[base] || ICON_FALLBACKS[day] || ['cloud'];
-  return [base, ...alts].map(n => `${ICON_DIR}/${n}.svg`);
-}
-
 function weatherIconMarkup(code, cls, night = false) {
   const candidates = iconCandidates(code, night);
   return `<img src="${escapeAttr(candidates[0])}" alt="" aria-hidden="true" class="${cls}" data-icon-fallbacks="${escapeAttr(candidates.slice(1).join('|'))}" />`;
@@ -2099,16 +2096,6 @@ function aIcon(type) {
 
 function setLocationIndicator(text) {
   if (el.locationIndicator) el.locationIndicator.textContent = trimLocationText(text);
-}
-
-function formatLocationName(location) {
-  return [location.name, location.region, location.country].filter(Boolean).join(', ');
-}
-
-function trimLocationText(text) {
-  if (!text) return '';
-  const parts = String(text).split(',').map(s => s.trim()).filter(Boolean);
-  return parts.length >= 2 ? `${parts[0]}, ${parts[1]}` : (parts[0] || '');
 }
 
 let toastTimer = null;

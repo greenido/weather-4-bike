@@ -21,7 +21,7 @@
   - Everything else (CDN scripts, photos): passes straight through.
 */
 
-const VERSION = '7f09ba6b8db9';
+const VERSION = '06d8e15d69e9';
 const SHELL_CACHE = `w4b-shell-${VERSION}`;
 // Deliberately not tied to VERSION: shipping new app code must not throw away
 // the rider's offline forecast. Bump by hand only if the saved shape changes.
@@ -48,6 +48,8 @@ const SHELL_ASSETS = [
   'js/net.js',
   'js/routes.js',
   'js/plan.js',
+  'js/calendar.js',
+  'js/icons.js',
   'manifest.json',
   'assets/icons/bike.svg',
   'assets/favicon_io/favicon-32x32.png',

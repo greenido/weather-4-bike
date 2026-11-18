@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   getSavedPlaces, isSavedPlace, toggleSavedPlace, placeKey, saveRecentLocation, getRecentLocations,
-  getCurrentLocation
+  getCurrentLocation, formatLocationName, trimLocationText, locationSubtitle
 } from '../js/location.js';
 
 /** Just enough of localStorage for the saved-places store. */
@@ -113,5 +113,25 @@ describe('getCurrentLocation', () => {
   test('rejects when the browser has no geolocation', async () => {
     Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {} });
     await assert.rejects(getCurrentLocation(), /not supported/);
+  });
+});
+
+describe('place labels', () => {
+  test('a full name leaves out the parts a place does not have', () => {
+    assert.equal(formatLocationName(HOME), 'Springfield, IL, USA');
+    assert.equal(formatLocationName(TRAIL), 'Shelbyville');
+    assert.equal(formatLocationName({ name: 'Ridge', region: '', country: 'Italy' }), 'Ridge, Italy');
+  });
+
+  test('the header keeps the first two parts', () => {
+    assert.equal(trimLocationText('Springfield, IL, USA'), 'Springfield, IL');
+    assert.equal(trimLocationText(' Shelbyville , '), 'Shelbyville');
+    assert.equal(trimLocationText(''), '');
+    assert.equal(trimLocationText(null), '');
+  });
+
+  test('a list subtitle tells same-named places apart by region and rough position', () => {
+    assert.equal(locationSubtitle(HOME), 'IL, USA · 39.78, -89.65');
+    assert.equal(locationSubtitle(TRAIL), '39.41, -88.79');
   });
 });
