@@ -1283,6 +1283,7 @@ function renderBestWindow() {
           ${week.tier.emoji} ${week.score}/10 · ${escapeHtml(week.tier.label)}
         </span>
       </div>
+      ${best ? WEEK_CALENDAR_LINK : ''}
     </div>` : '';
 
   const shared = sharedRideCard(scored);
@@ -1325,6 +1326,7 @@ function renderBestWindow() {
     </div>
     ${weekCard}`;
   wireRideActions(best);
+  if (weekIsBetter) wireCalendarLink(el.bestWindow.querySelector('[data-add-calendar-week]'), week);
 
   // A keyboard user starts on the first hour of the recommended window.
   wireRideChart(chartHours, chartHours.findIndex(h => h.date.getTime() === best.start.getTime()));
@@ -1333,10 +1335,12 @@ function renderBestWindow() {
 
 // --- Sharing a ride, and putting it in a calendar ----------------------------
 
+const CALENDAR_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M12 14v4M10 16h4"/></svg>';
+
 const RIDE_ACTIONS = `
   <div class="mt-3 flex flex-wrap justify-end gap-2">
     <a data-add-calendar target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/70 dark:bg-gray-800/70 px-3 py-1.5 text-sm font-medium hover:bg-white dark:hover:bg-gray-700 transition-colors">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M12 14v4M10 16h4"/></svg>
+      ${CALENDAR_ICON}
       Add to Google Calendar<span class="sr-only"> (opens in a new tab)</span>
     </a>
     <button data-share-ride class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/70 dark:bg-gray-800/70 px-3 py-1.5 text-sm font-medium hover:bg-white dark:hover:bg-gray-700 transition-colors">
@@ -1345,13 +1349,27 @@ const RIDE_ACTIONS = `
     </button>
   </div>`;
 
+// The later-this-week ride, when today's window is the headline. A text link,
+// so the week card stays secondary to the card above it.
+const WEEK_CALENDAR_LINK = `
+  <div class="mt-2 flex justify-end">
+    <a data-add-calendar-week target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 text-sm font-medium text-blue-700 dark:text-blue-300 hover:underline">
+      ${CALENDAR_ICON}
+      Add this one to Google Calendar<span class="sr-only"> (opens in a new tab)</span>
+    </a>
+  </div>`;
+
 function wireRideActions(ride) {
   el.bestWindow.querySelector('[data-share-ride]')?.addEventListener('click', () => shareRide(ride));
-  const calendar = el.bestWindow.querySelector('[data-add-calendar]');
-  if (!calendar) return;
+  wireCalendarLink(el.bestWindow.querySelector('[data-add-calendar]'), ride);
+}
+
+/** Point a calendar link at `ride`, or drop it when the ride cannot become an event. */
+function wireCalendarLink(link, ride) {
+  if (!link) return;
   const href = rideCalendarUrl(ride);
-  if (href) calendar.href = href;
-  else calendar.remove();
+  if (href) link.href = href;
+  else link.remove();
 }
 
 /** A link back to this app, opened on `ride`. See js/plan.js. */
