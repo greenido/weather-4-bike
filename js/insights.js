@@ -770,11 +770,21 @@ function isContiguous(slice) {
   return true;
 }
 
+// Civil twilight lasts roughly half an hour at mid latitudes: light enough to
+// ride, so an hour may start or end that close to the sun being down.
+const TWILIGHT_MS = 30 * 60 * 1000;
+
+/**
+ * Whether the whole hour starting at `date` is light enough to ride.
+ * Both ends are checked: testing only the start let a 4 PM hour count with
+ * sunset at 4:01, sending the rider out for an hour in the dark.
+ */
 function isDaylight(date, daylightRanges) {
-  const t = date.getTime();
+  const start = date.getTime();
+  const end = start + 3600 * 1000;
   return daylightRanges.some(r => {
     if (!r?.sunrise || !r?.sunset) return true;
-    return t >= r.sunrise.getTime() && t <= r.sunset.getTime();
+    return start >= r.sunrise.getTime() - TWILIGHT_MS && end <= r.sunset.getTime() + TWILIGHT_MS;
   });
 }
 

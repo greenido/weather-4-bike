@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   safeTimeZone, unixToIso, localDateKey, formatClock, dayPrefix,
-  formatWeekday, isNight, describeFreshness
+  formatWeekday, isNight, describeFreshness, shouldRefresh
 } from '../js/time.js';
 import { inZone, VIEWER_ZONES } from './helpers.js';
 
@@ -159,5 +159,29 @@ describe('describeFreshness', () => {
 
   test('no timestamp, no claim', () => {
     assert.deepEqual(describeFreshness(undefined, t0), { text: '', stale: false });
+  });
+});
+
+describe('shouldRefresh', () => {
+  const t0 = Date.parse('2026-09-11T12:00:00Z');
+  const min = 60000;
+
+  test('leaves a young forecast alone', () => {
+    assert.equal(shouldRefresh(t0, null, t0 + 9 * min), false);
+  });
+
+  test('refreshes one that has aged past ten minutes', () => {
+    assert.equal(shouldRefresh(t0, null, t0 + 10 * min), true);
+    assert.equal(shouldRefresh(t0, null, t0 + 5 * 60 * min), true);
+  });
+
+  test('tries at most once a minute while the refresh keeps failing', () => {
+    const now = t0 + 3 * 60 * min;
+    assert.equal(shouldRefresh(t0, now - 20000, now), false);
+    assert.equal(shouldRefresh(t0, now - min, now), true);
+  });
+
+  test('with no forecast yet there is nothing to refresh', () => {
+    assert.equal(shouldRefresh(undefined, null, t0), false);
   });
 });

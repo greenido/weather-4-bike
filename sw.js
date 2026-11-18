@@ -21,7 +21,7 @@
   - Everything else (CDN scripts, photos): passes straight through.
 */
 
-const VERSION = 'db91a98f31ca';
+const VERSION = '7f09ba6b8db9';
 const SHELL_CACHE = `w4b-shell-${VERSION}`;
 // Deliberately not tied to VERSION: shipping new app code must not throw away
 // the rider's offline forecast. Bump by hand only if the saved shape changes.

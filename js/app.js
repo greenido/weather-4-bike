@@ -34,7 +34,7 @@ import {
   degToCardinal, temperatureComfort, windDescriptor, convertTemp, systemFor,
   describeHourConditions, hourConditionsSentence
 } from './units.js';
-import { formatClock as clockAt, dayPrefix, formatWeekday, isNight, describeFreshness } from './time.js';
+import { formatClock as clockAt, dayPrefix, formatWeekday, isNight, describeFreshness, shouldRefresh } from './time.js';
 import { createLatestGate, isAbort } from './net.js';
 import { bikeRoutesUrl } from './routes.js';
 import { planPlace, rankPlans, scoreWindowAt, shareHash, parseShareHash } from './plan.js';
@@ -338,11 +338,35 @@ function bindUI() {
     if (state.location) await loadWeather(state.location, { force: true });
   });
 
+  // Coming back to the app (or to a page restored from the back/forward cache)
+  // after a while must not leave an old verdict on screen.
+  document.addEventListener('visibilitychange', refreshIfStale);
+  window.addEventListener('pageshow', (e) => { if (e.persisted) refreshIfStale(); });
+
   document.addEventListener('click', (e) => {
     if (el.searchResults && !el.searchResults.contains(e.target) && e.target !== el.citySearch) {
       closeSearchResults();
     }
   });
+}
+
+let lastResumeRefresh = null;
+
+/**
+ * Goal: Reload a forecast that went stale while the app was in the background.
+ * Why: An installed app resumes where it was left, sometimes hours later.
+ * How: Quietly — the old forecast stays up, with its age showing, until the new
+ *      one lands, and stays up if the refresh fails. A request the rider started
+ *      is never interrupted.
+ */
+function refreshIfStale() {
+  if (document.visibilityState !== 'visible' || !state.weather || !state.location) return;
+  renderFreshness();
+  if (state.loading) return;
+  const now = Date.now();
+  if (!shouldRefresh(state.weather.fetchedAt, lastResumeRefresh, now)) return;
+  lastResumeRefresh = now;
+  loadWeather(state.location, { quiet: true });
 }
 
 /**
@@ -1040,19 +1064,25 @@ function bindHelpModal() {
  *      Every step after an await checks its ticket: if the rider has moved on,
  *      a late answer is dropped — not rendered, not saved as their location.
  *
+ * With `quiet`, the screen keeps the forecast it has — no placeholders while
+ * loading, and no error banner if the refresh fails.
+ *
  * @returns {Promise<'fresh'|'offline'|'error'|'superseded'>}
  */
 async function loadWeather(location, options = {}) {
+  const { quiet = false, ...fetchOptions } = options;
   const ticket = loadGate.begin();
   state.location = location;
   state.loading = true;
-  state.error = null;
-  hideErrorBanner();
-  setLocationIndicator(formatLocationName(location));
-  renderSkeletons();
+  if (!quiet) {
+    state.error = null;
+    hideErrorBanner();
+    setLocationIndicator(formatLocationName(location));
+    renderSkeletons();
+  }
 
   try {
-    const weather = await fetchWeatherData(location.latitude, location.longitude, { ...options, signal: ticket.signal });
+    const weather = await fetchWeatherData(location.latitude, location.longitude, { ...fetchOptions, signal: ticket.signal });
     if (!ticket.isCurrent()) return 'superseded';
     state.weather = weather;
     // The previous place's AQI must not sit beside this place's forecast.
@@ -1070,10 +1100,12 @@ async function loadWeather(location, options = {}) {
     setLastLocation(location);
 
     state.loading = false;
+    state.error = null;
+    hideErrorBanner();
     renderAll();
 
     // Air quality is a bonus: fetch after the main render so it never delays it.
-    fetchAirQuality(location.latitude, location.longitude, { ...options, signal: ticket.signal }).then(air => {
+    fetchAirQuality(location.latitude, location.longitude, { ...fetchOptions, signal: ticket.signal }).then(air => {
       if (!ticket.isCurrent()) return;
       state.airQuality = air;
       if (state.weather) state.weather.airQuality = air;
@@ -1085,6 +1117,7 @@ async function loadWeather(location, options = {}) {
     // Superseded requests are aborted on purpose; that is not an error to show.
     if (!ticket.isCurrent() || isAbort(e)) return 'superseded';
     state.loading = false;
+    if (quiet && state.weather) return 'error';
     state.error = e;
     showErrorBanner(e);
     return 'error';
