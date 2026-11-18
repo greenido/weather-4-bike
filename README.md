@@ -79,7 +79,7 @@ Everything outside `app.js` is pure and dependency-free, so it is directly testa
 npm test
 ```
 
-187 tests cover the penalty model, unknown-vs-zero handling, hard hazard ceilings, per-discipline weighting, the best-window search, rain timing, unit conversion, time zones, request races and timeouts, the service worker, saved places, multi-place planning and share links.
+The tests cover the penalty model, unknown-vs-zero handling, hard hazard ceilings, per-discipline weighting, the best-window search, rain timing, unit conversion, time zones, request races and timeouts, the service worker, saved places, multi-place planning and share links.
 
 - **Time-zone tests run under several process zones** (`inZone` in `test/helpers.js`). The time-zone bug only exists when the viewer's zone differs from the location's, and CI runs in UTC — a test that just runs "normally" passes while the app is wrong for everyone else.
 - **`sw.js` is tested as shipped.** It is a classic worker script, not a module, so `test/sw.test.js` runs the real file in a Node VM with fake `caches` and `fetch`.
@@ -118,6 +118,9 @@ js/
   time.js          # Location-zone formatting and data freshness  (pure, no DOM)
   net.js           # Request deadlines and "latest request wins"  (pure, no DOM)
   routes.js        # Link to the Bike Routes app for a given ride  (pure, no DOM)
+  plan.js          # Multi-place planning and share links  (pure, no DOM)
+scripts/
+  stamp-sw.js      # Stamps the service worker version from the app-shell hash
 test/
   helpers.js       # inZone(), inZoneAsync(), deferred(), metFixture()
   insights.test.js
@@ -125,6 +128,8 @@ test/
   time.test.js
   net.test.js
   routes.test.js
+  plan.test.js     # Multi-place ranking and share-link round trips
+  location.test.js # Saved places, recents, geolocation
   weather.test.js  # Parsing and fetch policy, against a Tel Aviv fixture
   metno.test.js    # MET Norway shaping, symbol codes, sun times
   sw.test.js       # The real sw.js, in a VM
@@ -132,7 +137,7 @@ assets/
   icons/weather2/static/   # Weather icon set
 ```
 
-`insights.js`, `units.js`, `time.js`, `net.js` and `metno.js` have no DOM or storage dependencies — that is what makes them testable, and it is worth keeping that way.
+`insights.js`, `units.js`, `time.js`, `net.js`, `metno.js`, `routes.js` and `plan.js` have no DOM or storage dependencies — that is what makes them testable, and it is worth keeping that way.
 
 ## Scoring
 
@@ -218,9 +223,9 @@ Weather icons load from `assets/icons/weather2/static/`. Each weather code has a
 
 ## Deploy to GitHub Pages
 
-Pure static site — no build step on the server. Push to the default branch, then Settings → Pages → Deploy from a branch → `main` / root. `.nojekyll` is already present.
+Pure static site — no build step on the server. Push to the default branch, then Settings → Pages → Deploy from a branch → `master` / root. `.nojekyll` is already present.
 
-Remember to run `npm run build:css` and commit `styles/output.css` before pushing if you changed any markup.
+Run `npm run build` and commit the result before pushing: it recompiles `styles/output.css` and restamps the service worker, and CI fails if either is stale.
 
 ## License
 
