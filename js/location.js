@@ -26,18 +26,24 @@ const MAX_SAVED = 8;
  * Why: Enables one-tap weather for where the rider is.
  * How: Wrap `navigator.geolocation.getCurrentPosition` in a Promise and return
  *      latitude, longitude, and accuracy.
+ *
+ *      A forecast grid cell is kilometres across, so a network fix is plenty:
+ *      asking for GPS accuracy only made the rider wait for a satellite fix and
+ *      spent battery. For the same reason the position is rounded to about
+ *      100 m before it goes anywhere — the weather and place-name services
+ *      have no use for the rider's front door.
  */
-export function getCurrentLocation(options = { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }) {
+export function getCurrentLocation(options = { enableHighAccuracy: false, timeout: 10000, maximumAge: 5 * 60000 }) {
   return new Promise((resolve, reject) => {
-    if (!('geolocation' in navigator)) {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
       reject(new Error('Geolocation not supported'));
       return;
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         resolve({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
+          latitude: roundCoord(pos.coords.latitude),
+          longitude: roundCoord(pos.coords.longitude),
           accuracy: pos.coords.accuracy
         });
       },
@@ -45,6 +51,11 @@ export function getCurrentLocation(options = { enableHighAccuracy: true, timeout
       options
     );
   });
+}
+
+/** Three decimal places: about 110 m of latitude. */
+function roundCoord(value) {
+  return Math.round(value * 1000) / 1000;
 }
 
 /**
