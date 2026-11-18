@@ -5,7 +5,6 @@
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
-  "orientation": "portrait-primary",
   "background_color": "#f9fafb",
   "theme_color": "#2563eb",
   "categories": ["sports", "weather", "utilities"],
@@ -23,7 +22,7 @@
       "purpose": "any"
     },
     {
-      "src": "assets/favicon_io/android-chrome-512x512.png",
+      "src": "assets/favicon_io/maskable-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

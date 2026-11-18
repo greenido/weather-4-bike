@@ -2,7 +2,8 @@ import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  getSavedPlaces, isSavedPlace, toggleSavedPlace, placeKey, saveRecentLocation, getRecentLocations
+  getSavedPlaces, isSavedPlace, toggleSavedPlace, placeKey, saveRecentLocation, getRecentLocations,
+  getCurrentLocation
 } from '../js/location.js';
 
 /** Just enough of localStorage for the saved-places store. */
@@ -82,5 +83,35 @@ describe('recent places', () => {
     save({ name: 'Current location', latitude: 39.78171, longitude: -89.65008 });
     save(HOME);
     assert.deepEqual(getRecentLocations().map(r => r.name), ['Springfield']);
+  });
+});
+
+describe('getCurrentLocation', () => {
+  /** A geolocation stub that records the options it was asked with. */
+  function stubGeolocation(coords) {
+    const calls = [];
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: { geolocation: { getCurrentPosition: (ok, _err, options) => { calls.push(options); ok({ coords }); } } }
+    });
+    return calls;
+  }
+
+  test('asks for a quick network fix, not GPS', async () => {
+    const calls = stubGeolocation({ latitude: 39.78, longitude: -89.65, accuracy: 900 });
+    await getCurrentLocation();
+    assert.equal(calls[0].enableHighAccuracy, false);
+    assert.ok(calls[0].maximumAge >= 60000, 'a fix from a few minutes ago is good enough');
+  });
+
+  test('rounds the position to about 100 m before anyone sees it', async () => {
+    stubGeolocation({ latitude: 39.781734, longitude: -89.650148, accuracy: 15 });
+    const pos = await getCurrentLocation();
+    assert.deepEqual(pos, { latitude: 39.782, longitude: -89.65, accuracy: 15 });
+  });
+
+  test('rejects when the browser has no geolocation', async () => {
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {} });
+    await assert.rejects(getCurrentLocation(), /not supported/);
   });
 });
