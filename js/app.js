@@ -38,6 +38,7 @@ import { formatClock as clockAt, dayPrefix, formatWeekday, isNight, describeFres
 import { createLatestGate, isAbort } from './net.js';
 import { bikeRoutesUrl } from './routes.js';
 import { planPlace, rankPlans, scoreWindowAt, shareHash, parseShareHash } from './plan.js';
+import { rideEvent, googleCalendarUrl } from './calendar.js';
 
 // One gate per kind of request: only the newest may change the screen.
 const loadGate = createLatestGate();
@@ -1299,9 +1300,9 @@ function renderBestWindow() {
         <div class="text-sm text-gray-600 dark:text-gray-300 mt-2">${rainLine}</div>
       </div>
       ${week ? weekCard : ''}
-      ${week ? SHARE_BUTTON : ''}`;
+      ${week ? RIDE_ACTIONS : ''}`;
     rideChart = null;
-    wireShareButton(week);
+    wireRideActions(week);
     renderRoutesCta(week?.start);
     return;
   }
@@ -1324,28 +1325,59 @@ function renderBestWindow() {
         </div>
       </div>
       ${sparkline}
-      ${SHARE_BUTTON}
+      ${RIDE_ACTIONS}
     </div>
     ${weekCard}`;
-  wireShareButton(best);
+  wireRideActions(best);
 
   // A keyboard user starts on the first hour of the recommended window.
   wireRideChart(chartHours, chartHours.findIndex(h => h.date.getTime() === best.start.getTime()));
   renderRoutesCta(best.start);
 }
 
-// --- Sharing a ride ---------------------------------------------------------
+// --- Sharing a ride, and putting it in a calendar ----------------------------
 
-const SHARE_BUTTON = `
-  <div class="mt-3 flex justify-end">
+const RIDE_ACTIONS = `
+  <div class="mt-3 flex flex-wrap justify-end gap-2">
+    <a data-add-calendar target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/70 dark:bg-gray-800/70 px-3 py-1.5 text-sm font-medium hover:bg-white dark:hover:bg-gray-700 transition-colors">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M12 14v4M10 16h4"/></svg>
+      Add to Google Calendar<span class="sr-only"> (opens in a new tab)</span>
+    </a>
     <button data-share-ride class="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white/70 dark:bg-gray-800/70 px-3 py-1.5 text-sm font-medium hover:bg-white dark:hover:bg-gray-700 transition-colors">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4" aria-hidden="true"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/></svg>
       Share this ride
     </button>
   </div>`;
 
-function wireShareButton(ride) {
+function wireRideActions(ride) {
   el.bestWindow.querySelector('[data-share-ride]')?.addEventListener('click', () => shareRide(ride));
+  const calendar = el.bestWindow.querySelector('[data-add-calendar]');
+  if (!calendar) return;
+  const href = rideCalendarUrl(ride);
+  if (href) calendar.href = href;
+  else calendar.remove();
+}
+
+/** A link back to this app, opened on `ride`. See js/plan.js. */
+function rideLink(ride) {
+  return `${window.location.origin}${window.location.pathname}${shareHash({
+    place: state.location, activity: state.activity, hours: ride.hours, start: ride.start
+  })}`;
+}
+
+/**
+ * Goal: Keep the afternoon free for the ride the app recommends.
+ * Why: A window is only useful if it is still free when it comes round.
+ * How: A pre-filled Google Calendar event (js/calendar.js) that links back
+ *      here, so the rider can check the forecast again before setting off.
+ */
+function rideCalendarUrl(ride) {
+  if (!state.location || !ride) return null;
+  return googleCalendarUrl(rideEvent(ride, {
+    activityLabel: DISCIPLINES[state.activity].label,
+    placeName: trimLocationText(formatLocationName(state.location)),
+    link: rideLink(ride)
+  }));
 }
 
 /**
@@ -1357,9 +1389,7 @@ function wireShareButton(ride) {
  */
 async function shareRide(ride) {
   if (!state.location || !ride) return;
-  const url = `${window.location.origin}${window.location.pathname}${shareHash({
-    place: state.location, activity: state.activity, hours: ride.hours, start: ride.start
-  })}`;
+  const url = rideLink(ride);
   const text = `${DISCIPLINES[state.activity].label} ride in ${state.location.name}: ${formatDayPrefix(ride.start) || 'Today '}${formatClock(ride.start)} – ${formatClock(ride.end)}, ${ride.score}/10`;
   try {
     if (navigator.share) {

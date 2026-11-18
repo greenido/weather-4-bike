@@ -36,6 +36,7 @@ const HASHED_FILES = [
   'js/net.js',
   'js/routes.js',
   'js/plan.js',
+  'js/calendar.js',
   'manifest.json'
 ];
 

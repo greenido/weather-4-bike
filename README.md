@@ -12,6 +12,7 @@ Cycling-focused weather app that turns a forecast into a ride decision, for road
 - **Wind chill at riding speed** — what it actually feels like at 28 km/h, not standing still
 - **Where & when should I ride?** — star the places you ride; each is ranked by its best window this week (for your discipline and ride length), with a places × days grid on desktop and a ranked list on a phone. Tap a place to open it
 - **Share a ride** — sends a link that opens on the same place, discipline, ride length and start time, scored against the forecast your friend sees. The ride travels in the URL fragment, which never reaches a server or the page's analytics, and coordinates are rounded to ~1 km
+- **Add to Google Calendar** — one tap puts the recommended window in your calendar, with the score it had when you planned it and a link back to the app, so you can check the forecast again before heading out. Times go over as exact instants, so the event lands on your own clock wherever the ride is
 - **Calibrated to you** — set your own comfortable temperature range and typical speed
 - Rideability score (1–10) per discipline, with a transparent penalty breakdown
 - Rain timing ("dry until 2pm" / "clearing around 4pm") rather than just a daily percentage
@@ -115,6 +116,7 @@ js/
   location.js      # Geolocation, geocoding, recents
   insights.js      # Scoring, alerts, best-window search  (pure, no DOM)
   units.js         # Unit systems and all display formatting  (pure, no DOM)
+  calendar.js      # A ride as a calendar event; Google Calendar link  (pure, no DOM)
   time.js          # Location-zone formatting and data freshness  (pure, no DOM)
   net.js           # Request deadlines and "latest request wins"  (pure, no DOM)
   routes.js        # Link to the Bike Routes app for a given ride  (pure, no DOM)
@@ -122,6 +124,7 @@ test/
   helpers.js       # inZone(), inZoneAsync(), deferred(), metFixture()
   insights.test.js
   units.test.js
+  calendar.test.js # Event fields, UTC instants under several viewer zones
   time.test.js
   net.test.js
   routes.test.js
