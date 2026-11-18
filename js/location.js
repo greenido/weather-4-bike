@@ -108,8 +108,7 @@ export async function reverseGeocode(latitude, longitude) {
 export function saveRecentLocation(location) {
   try {
     const recents = getRecentLocationsInternal();
-    const targetName = normalizeName(location.name);
-    const withoutDup = recents.filter(r => r.id !== location.id && normalizeName(r.name) !== targetName);
+    const withoutDup = recents.filter(r => r.id !== location.id && !sameRecent(r, location));
     const updated = [ { ...location, timestamp: Date.now() }, ...withoutDup ].slice(0, MAX_RECENTS);
     localStorage.setItem(RECENTS_KEY, JSON.stringify(updated));
   } catch (e) {
@@ -148,23 +147,30 @@ function getRecentLocationsInternal() {
   if (!raw) return [];
   const arr = JSON.parse(raw);
   if (!Array.isArray(arr)) return [];
-  // Sort newest first and ensure unique per name (case-insensitive)
+  // Sort newest first, keeping one entry per place.
   const sorted = [...arr].sort((a, b) => (Number(b.timestamp || 0) - Number(a.timestamp || 0)));
-  const seen = new Set();
   const unique = [];
   for (const item of sorted) {
-    const key = normalizeName(item.name);
-    if (!seen.has(key)) {
-      seen.add(key);
-      unique.push(item);
-    }
+    if (!unique.some(u => sameRecent(u, item))) unique.push(item);
     if (unique.length >= MAX_RECENTS) break;
   }
   return unique;
 }
 
-function normalizeName(name) {
-  return String(name || '').trim().toLowerCase();
+/**
+ * Whether two recents are one place.
+ * Why: Matching on the name alone made Portland, Maine replace Portland, Oregon.
+ *      Matching on coordinates alone would list every GPS fix around town
+ *      separately. So: the same spot, or the same name in the same region and
+ *      country.
+ */
+function sameRecent(a, b) {
+  if (placeKey(a) === placeKey(b)) return true;
+  return placeLabel(a) === placeLabel(b);
+}
+
+function placeLabel(loc) {
+  return [loc?.name, loc?.region, loc?.country].map(v => String(v || '').trim().toLowerCase()).join('|');
 }
 
 // --- Saved places -----------------------------------------------------------

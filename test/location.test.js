@@ -1,7 +1,9 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getSavedPlaces, isSavedPlace, toggleSavedPlace, placeKey } from '../js/location.js';
+import {
+  getSavedPlaces, isSavedPlace, toggleSavedPlace, placeKey, saveRecentLocation, getRecentLocations
+} from '../js/location.js';
 
 /** Just enough of localStorage for the saved-places store. */
 function installStorage() {
@@ -53,5 +55,32 @@ describe('saved places', () => {
     assert.deepEqual(getSavedPlaces(), []);
     localStorage.setItem('w4b:savedPlaces', JSON.stringify([{ name: 'x' }, HOME]));
     assert.deepEqual(getSavedPlaces().map(p => p.name), ['Springfield']);
+  });
+});
+
+describe('recent places', () => {
+  beforeEach(installStorage);
+
+  const save = (loc) => saveRecentLocation({ id: `${loc.latitude},${loc.longitude}`, ...loc });
+
+  test('two towns with one name are two places', () => {
+    save({ name: 'Portland', latitude: 45.5152, longitude: -122.6784, region: 'Oregon', country: 'United States' });
+    save({ name: 'Portland', latitude: 43.6591, longitude: -70.2568, region: 'Maine', country: 'United States' });
+    assert.deepEqual(getRecentLocations().map(r => r.region), ['Maine', 'Oregon']);
+  });
+
+  test('another GPS fix in the same town replaces the old entry', () => {
+    save({ name: 'Springfield', latitude: 39.7817, longitude: -89.6501, region: 'IL', country: 'USA' });
+    save(TRAIL);
+    save({ name: 'Springfield', latitude: 39.8012, longitude: -89.6436, region: 'IL', country: 'USA' });
+    const recents = getRecentLocations();
+    assert.deepEqual(recents.map(r => r.name), ['Springfield', 'Shelbyville']);
+    assert.equal(recents[0].latitude, 39.8012, 'the newest fix is the one kept');
+  });
+
+  test('the same spot under a new name is one place', () => {
+    save({ name: 'Current location', latitude: 39.78171, longitude: -89.65008 });
+    save(HOME);
+    assert.deepEqual(getRecentLocations().map(r => r.name), ['Springfield']);
   });
 });
