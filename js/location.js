@@ -260,3 +260,24 @@ export function getLastLocation() {
 }
 
 
+
+// --- Place labels -------------------------------------------------------------
+
+/** "Name, Region, Country", leaving out whatever is missing. */
+export function formatLocationName(location) {
+  return [location?.name, location?.region, location?.country].filter(Boolean).join(', ');
+}
+
+/** The first two parts of a place label — "Springfield, IL", not the whole address. */
+export function trimLocationText(text) {
+  if (!text) return '';
+  const parts = String(text).split(',').map(s => s.trim()).filter(Boolean);
+  return parts.length >= 2 ? `${parts[0]}, ${parts[1]}` : (parts[0] || '');
+}
+
+/** The second line of a place in a list: region, country and rough coordinates. */
+export function locationSubtitle(loc) {
+  const parts = [loc.region, loc.country].filter(Boolean);
+  const coords = `${Number(loc.latitude).toFixed(2)}, ${Number(loc.longitude).toFixed(2)}`;
+  return parts.length ? `${parts.join(', ')} · ${coords}` : coords;
+}

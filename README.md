@@ -117,6 +117,7 @@ js/
   insights.js      # Scoring, alerts, best-window search  (pure, no DOM)
   units.js         # Unit systems and all display formatting  (pure, no DOM)
   calendar.js      # A ride as a calendar event; Google Calendar link  (pure, no DOM)
+  icons.js         # Weather code → icon file, with fallbacks  (pure, no DOM)
   time.js          # Location-zone formatting and data freshness  (pure, no DOM)
   net.js           # Request deadlines and "latest request wins"  (pure, no DOM)
   routes.js        # Link to the Bike Routes app for a given ride  (pure, no DOM)
@@ -125,6 +126,7 @@ test/
   insights.test.js
   units.test.js
   calendar.test.js # Event fields, UTC instants under several viewer zones
+  icons.test.js    # Every icon a weather code can ask for exists on disk
   time.test.js
   net.test.js
   routes.test.js

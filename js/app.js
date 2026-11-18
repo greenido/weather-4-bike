@@ -22,7 +22,8 @@ import { fetchWeatherData, fetchAirQuality, getDaylightRanges, clearWeatherCache
 import {
   getCurrentLocation, searchCities, saveRecentLocation, getRecentLocations,
   clearRecentLocations, reverseGeocode, setLastLocation, getLastLocation,
-  getSavedPlaces, isSavedPlace, toggleSavedPlace, placeKey
+  getSavedPlaces, isSavedPlace, toggleSavedPlace, placeKey,
+  formatLocationName, trimLocationText, locationSubtitle
 } from './location.js';
 import {
   DISCIPLINES, scoreCurrent, scoreHourlySeries, findBestWindow, findHeadlineWindow, findRainTiming,
@@ -39,6 +40,7 @@ import { createLatestGate, isAbort } from './net.js';
 import { bikeRoutesUrl } from './routes.js';
 import { planPlace, rankPlans, scoreWindowAt, shareHash, parseShareHash } from './plan.js';
 import { rideEvent, googleCalendarUrl } from './calendar.js';
+import { iconCandidates } from './icons.js';
 
 // One gate per kind of request: only the newest may change the screen.
 const loadGate = createLatestGate();
@@ -913,12 +915,6 @@ async function chooseCity(city) {
   searchOptions = [];
   el.locationDialog?.close();
   await loadWeather(city);
-}
-
-function locationSubtitle(loc) {
-  const parts = [loc.region, loc.country].filter(Boolean);
-  const coords = `${Number(loc.latitude).toFixed(2)}, ${Number(loc.longitude).toFixed(2)}`;
-  return parts.length ? `${parts.join(', ')} · ${coords}` : coords;
 }
 
 // --- Saved and recent places, in the location sheet --------------------------
@@ -1984,53 +1980,6 @@ function initScenicImage() {
 // Weather icons
 // ---------------------------------------------------------------------------
 
-const ICON_DIR = 'assets/icons/weather2/static';
-
-const ICON_BY_CODE = {
-  0: 'sun',
-  1: 'sun-cloud', 2: 'sun-cloud',
-  3: 'cloud',
-  45: 'fog', 48: 'fog',
-  51: 'drizzle', 53: 'drizzle', 55: 'drizzle', 56: 'drizzle', 57: 'drizzle',
-  61: 'rain', 63: 'rain', 65: 'rain', 80: 'rain', 81: 'rain', 82: 'rain',
-  // This icon pack ships no sleet/freezing-rain glyph, so point the freezing
-  // codes straight at the rain-snow mix rather than requesting a known 404.
-  // Drop a `sleet.svg` into the pack and change these two lines to use it.
-  66: 'snowy-4', 67: 'snowy-4',
-  71: 'snow', 73: 'snow', 75: 'snow', 77: 'snow', 85: 'snow', 86: 'snow',
-  95: 'storm', 96: 'storm', 99: 'storm'
-};
-
-const ICON_NIGHT = { sun: 'night', 'sun-cloud': 'cloudy-night-1', cloud: 'cloudy-night-2' };
-
-/**
- * Fallbacks are exact file names that exist in the icon pack. The pack has no
- * `sleet.svg`, which is why freezing-rain codes used to render as a broken image.
- */
-const ICON_FALLBACKS = {
-  sun: ['sun-cloud', 'cloud'],
-  'sun-cloud': ['cloudy-day-2', 'sun', 'cloud'],
-  cloud: ['cloudy-day-3', 'sun-cloud'],
-  fog: ['haze', 'cloud'],
-  drizzle: ['rainy-4', 'rain', 'cloud'],
-  rain: ['rain-2', 'rainy-2', 'drizzle', 'cloud'],
-  'snowy-4': ['rainy-5', 'rain', 'cloud'],
-  snow: ['snowy-1', 'snowy-2', 'snowy-4', 'cloud'],
-  storm: ['rainy-3', 'rain', 'cloud'],
-  night: ['cloudy-night-1', 'cloud'],
-  'cloudy-night-1': ['cloudy-night-2', 'cloud'],
-  'cloudy-night-2': ['cloudy-night-3', 'cloud']
-};
-
-function iconCandidates(code, night = false) {
-  const day = ICON_BY_CODE[code] || 'cloud';
-  const base = night && ICON_NIGHT[day] ? ICON_NIGHT[day] : day;
-  // Exact-key lookup. The old code used `baseName.includes(key)`, so 'sun-cloud'
-  // matched the 'sun' entry first and inherited the wrong fallback list.
-  const alts = ICON_FALLBACKS[base] || ICON_FALLBACKS[day] || ['cloud'];
-  return [base, ...alts].map(n => `${ICON_DIR}/${n}.svg`);
-}
-
 function weatherIconMarkup(code, cls, night = false) {
   const candidates = iconCandidates(code, night);
   return `<img src="${escapeAttr(candidates[0])}" alt="" aria-hidden="true" class="${cls}" data-icon-fallbacks="${escapeAttr(candidates.slice(1).join('|'))}" />`;
@@ -2096,16 +2045,6 @@ function aIcon(type) {
 
 function setLocationIndicator(text) {
   if (el.locationIndicator) el.locationIndicator.textContent = trimLocationText(text);
-}
-
-function formatLocationName(location) {
-  return [location.name, location.region, location.country].filter(Boolean).join(', ');
-}
-
-function trimLocationText(text) {
-  if (!text) return '';
-  const parts = String(text).split(',').map(s => s.trim()).filter(Boolean);
-  return parts.length >= 2 ? `${parts[0]}, ${parts[1]}` : (parts[0] || '');
 }
 
 let toastTimer = null;
