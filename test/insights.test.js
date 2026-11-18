@@ -340,12 +340,37 @@ describe('findBestWindow', () => {
     );
   });
 
+  test('a window ends by sunset, give or take twilight', () => {
+    // Every hour is perfect, so only daylight decides. Sunset at 17:01: the
+    // 16:00 hour ends inside it and counts; the 17:00 hour *starts* before
+    // sunset but ends an hour after it, so it must not.
+    const base = new Date('2026-11-18T08:00:00Z');
+    const scored = scoreHourlySeries({ hourly: buildHourly(base, Array.from({ length: 16 }, () => ({}))) }, 'road', { now: base, hours: 16 });
+    const daylight = [{ sunrise: new Date('2026-11-18T06:53:00Z'), sunset: new Date('2026-11-18T17:01:00Z') }];
+
+    const late = findBestWindow(scored.filter(h => h.date >= new Date('2026-11-18T15:00:00Z')), { now: base, daylight, minHours: 2, maxHours: 2 });
+    assert.equal(late.start.toISOString(), '2026-11-18T15:00:00.000Z');
+    assert.equal(late.end.toISOString(), '2026-11-18T17:00:00.000Z');
+
+    const tooLate = findBestWindow(scored.filter(h => h.date >= new Date('2026-11-18T16:00:00Z')), { now: base, daylight, minHours: 2, maxHours: 2 });
+    assert.equal(tooLate, null, 'a 16:00–18:00 ride finishes an hour after sunset');
+  });
+
+  test('a window may start in morning twilight, but not before it', () => {
+    const base = new Date('2026-11-18T05:00:00Z');
+    const scored = scoreHourlySeries({ hourly: buildHourly(base, Array.from({ length: 6 }, () => ({}))) }, 'road', { now: base, hours: 6 });
+    const daylight = [{ sunrise: new Date('2026-11-18T06:20:00Z'), sunset: new Date('2026-11-18T16:56:00Z') }];
+
+    const best = findBestWindow(scored, { now: base, daylight, minHours: 2, maxHours: 2 });
+    assert.equal(best.start.toISOString(), '2026-11-18T06:00:00.000Z', '06:00 is 20 min before sunrise; 05:00 is 80');
+  });
+
   test('never joins the last hour before sunset to the first after sunrise', () => {
-    // Once night is filtered out, 18:00 and 06:00 sit side by side in the pool.
+    // Once night is filtered out, 17:00 and 06:00 sit side by side in the pool.
     // They are the only good hours, so a window that bridges them would win.
     const base = new Date('2026-10-01T00:00:00Z');
     const bad = { windSpeed: 65, precipitationProbability: 100, precipitation: 6 };
-    const specs = Array.from({ length: 48 }, (_, i) => (i === 18 || i === 30 ? {} : bad));
+    const specs = Array.from({ length: 48 }, (_, i) => (i === 17 || i === 30 ? {} : bad));
     const scored = scoreHourlySeries({ hourly: buildHourly(base, specs) }, 'road', { now: base, hours: 48 });
     const daylight = [0, 1].map(d => ({
       sunrise: new Date(base.getTime() + (d * 24 + 6) * 3600 * 1000),

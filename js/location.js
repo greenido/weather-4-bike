@@ -26,18 +26,24 @@ const MAX_SAVED = 8;
  * Why: Enables one-tap weather for where the rider is.
  * How: Wrap `navigator.geolocation.getCurrentPosition` in a Promise and return
  *      latitude, longitude, and accuracy.
+ *
+ *      A forecast grid cell is kilometres across, so a network fix is plenty:
+ *      asking for GPS accuracy only made the rider wait for a satellite fix and
+ *      spent battery. For the same reason the position is rounded to about
+ *      100 m before it goes anywhere — the weather and place-name services
+ *      have no use for the rider's front door.
  */
-export function getCurrentLocation(options = { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }) {
+export function getCurrentLocation(options = { enableHighAccuracy: false, timeout: 10000, maximumAge: 5 * 60000 }) {
   return new Promise((resolve, reject) => {
-    if (!('geolocation' in navigator)) {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
       reject(new Error('Geolocation not supported'));
       return;
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         resolve({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
+          latitude: roundCoord(pos.coords.latitude),
+          longitude: roundCoord(pos.coords.longitude),
           accuracy: pos.coords.accuracy
         });
       },
@@ -45,6 +51,11 @@ export function getCurrentLocation(options = { enableHighAccuracy: true, timeout
       options
     );
   });
+}
+
+/** Three decimal places: about 110 m of latitude. */
+function roundCoord(value) {
+  return Math.round(value * 1000) / 1000;
 }
 
 /**
@@ -108,8 +119,7 @@ export async function reverseGeocode(latitude, longitude) {
 export function saveRecentLocation(location) {
   try {
     const recents = getRecentLocationsInternal();
-    const targetName = normalizeName(location.name);
-    const withoutDup = recents.filter(r => r.id !== location.id && normalizeName(r.name) !== targetName);
+    const withoutDup = recents.filter(r => r.id !== location.id && !sameRecent(r, location));
     const updated = [ { ...location, timestamp: Date.now() }, ...withoutDup ].slice(0, MAX_RECENTS);
     localStorage.setItem(RECENTS_KEY, JSON.stringify(updated));
   } catch (e) {
@@ -148,23 +158,30 @@ function getRecentLocationsInternal() {
   if (!raw) return [];
   const arr = JSON.parse(raw);
   if (!Array.isArray(arr)) return [];
-  // Sort newest first and ensure unique per name (case-insensitive)
+  // Sort newest first, keeping one entry per place.
   const sorted = [...arr].sort((a, b) => (Number(b.timestamp || 0) - Number(a.timestamp || 0)));
-  const seen = new Set();
   const unique = [];
   for (const item of sorted) {
-    const key = normalizeName(item.name);
-    if (!seen.has(key)) {
-      seen.add(key);
-      unique.push(item);
-    }
+    if (!unique.some(u => sameRecent(u, item))) unique.push(item);
     if (unique.length >= MAX_RECENTS) break;
   }
   return unique;
 }
 
-function normalizeName(name) {
-  return String(name || '').trim().toLowerCase();
+/**
+ * Whether two recents are one place.
+ * Why: Matching on the name alone made Portland, Maine replace Portland, Oregon.
+ *      Matching on coordinates alone would list every GPS fix around town
+ *      separately. So: the same spot, or the same name in the same region and
+ *      country.
+ */
+function sameRecent(a, b) {
+  if (placeKey(a) === placeKey(b)) return true;
+  return placeLabel(a) === placeLabel(b);
+}
+
+function placeLabel(loc) {
+  return [loc?.name, loc?.region, loc?.country].map(v => String(v || '').trim().toLowerCase()).join('|');
 }
 
 // --- Saved places -----------------------------------------------------------
