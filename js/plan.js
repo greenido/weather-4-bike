@@ -27,14 +27,17 @@ const HOUR_MS = 3600 * 1000;
 
 /**
  * One place's week, for a ride of `rideHours`.
- * @returns {{ best: object|null, days: { dateKey: string, window: object|null }[] }}
+ * Rides stay in daylight unless `withLights` — a rider who rides with lights
+ * lets night hours into the search.
+ * @returns {{ best: object|null, days: { dateKey: string, window: object|null,
+ *             sunrise: Date|null, sunset: Date|null }[] }}
  */
-export function planPlace(weather, activity, { rideHours = 2, scoring = {}, now = new Date() } = {}) {
+export function planPlace(weather, activity, { rideHours = 2, scoring = {}, now = new Date(), withLights = false } = {}) {
   const scored = scoreHourlySeries(weather, activity, { hours: 168, now, ...scoring });
   const daylight = getDaylightRanges(weather);
   const search = {
     now,
-    daylight: daylight.length ? daylight : null,
+    daylight: daylight.length && !withLights ? daylight : null,
     minHours: rideHours,
     maxHours: rideHours,
     withinHours: 168
@@ -43,7 +46,9 @@ export function planPlace(weather, activity, { rideHours = 2, scoring = {}, now 
   const best = findBestWindow(scored, search);
   const days = (Array.isArray(weather?.daily) ? weather.daily : []).map(d => ({
     dateKey: d.date,
-    window: findBestWindow(scored.filter(h => localDateKey(h.date, weather.timezone) === d.date), search)
+    window: findBestWindow(scored.filter(h => localDateKey(h.date, weather.timezone) === d.date), search),
+    sunrise: toDate(d.sunrise),
+    sunset: toDate(d.sunset)
   }));
   return { best, days };
 }
@@ -78,6 +83,12 @@ export function scoreWindowAt(scoredHours, start, hours) {
     score: Math.round(avg * 10) / 10,
     tier: scoreTier(avg)
   };
+}
+
+function toDate(value) {
+  if (value === null || value === undefined) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 // --- Share links --------------------------------------------------------------

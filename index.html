@@ -160,6 +160,14 @@
             </div>
           </div>
 
+          <section aria-labelledby="lights-title">
+            <h3 id="lights-title" class="font-semibold mb-1">Riding after dark</h3>
+            <label class="flex items-start gap-2 cursor-pointer">
+              <input id="pref-lights" type="checkbox" class="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-2 focus:ring-blue-500" />
+              <span>I ride with lights. Suggest rides after sunset or before sunrise too, marked with 🌙. Off: rides stay in daylight, give or take half an hour of twilight.</span>
+            </label>
+          </section>
+
           <section aria-labelledby="prefs-title">
             <h3 id="prefs-title" class="font-semibold mb-1">Calibrate it to you</h3>
             <p class="text-gray-600 dark:text-gray-300 mb-3">A rider acclimatised in Tel Aviv and one in Seattle do not agree on what 15°C means. Tell the app your range and the temperature score follows it.</p>
@@ -335,6 +343,8 @@
 
           <div class="px-4 py-4 text-sm leading-6 space-y-4">
             <p>Your comfortable temperature range and riding speed live in <strong>Settings</strong> (the gear in the header).</p>
+
+            <p><strong>Daylight.</strong> Suggested rides start no earlier than 30 minutes before sunrise and end no later than 30 minutes after sunset (civil twilight). Each ride shows its sunrise or sunset, and the hourly chart shades the night. If you ride with lights, turn on <em>Riding after dark</em> in Settings to include night hours.</p>
 
 
             <p>Every score starts at <strong>10.0</strong> and subtracts penalties for the conditions. The result is clamped to 1–10. If a measurement is unavailable, its penalty is <em>skipped</em> rather than counted as zero — unknown is not the same as perfect.</p>

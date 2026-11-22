@@ -86,6 +86,21 @@ function nextDateKey(key) {
 }
 
 /**
+ * "6:41" — a compact wall-clock time with no AM/PM, for tight spaces where the
+ * context says which half of the day it is (sunrise–sunset).
+ */
+export function formatShortClock(value, timeZone, locale) {
+  const d = toDate(value);
+  if (!d) return '—';
+  return new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit', timeZone: safeTimeZone(timeZone) })
+    .formatToParts(d)
+    .filter(p => p.type !== 'dayPeriod')
+    .map(p => p.value)
+    .join('')
+    .trim();
+}
+
+/**
  * Weekday of a calendar date ("2026-09-10" → "Thu").
  * A calendar date has no zone, so format it in UTC to stop it drifting a day.
  */

@@ -13,7 +13,8 @@ import {
   scoreConditions, scoreTier, scoreHourlySeries, findBestWindow, findHeadlineWindow, findRainTiming,
   recentPrecipSum, mudFactorFromRain, generateSafetyAlerts, generateRecommendations,
   surfaceState, resolveSurface, ridingWindChill, windRelationFor, scoreOutAndBack,
-  comfortBand, DEFAULT_COMFORT_BAND, DISCIPLINES, num
+  comfortBand, DEFAULT_COMFORT_BAND, DISCIPLINES, num,
+  rideLight, describeRideLight, formatMinutes
 } from '../js/insights.js';
 
 /** A calm, mild, dry, clear day — the baseline that should score 10. */
@@ -823,5 +824,84 @@ describe('findHeadlineWindow', () => {
   test('returns the best window when nothing comes before it, and null when there is none', () => {
     assert.equal(findHeadlineWindow(series([9, 9, 3, 3]), opts).score, 9);
     assert.equal(findHeadlineWindow([], opts), null);
+  });
+});
+
+describe('rideLight', () => {
+  const at = iso => new Date(`2026-11-21T${iso}:00Z`);
+  // Sunrise 06:40, sunset 16:52 (UTC), and the next day's sunrise.
+  const DAYLIGHT = [
+    { sunrise: at('06:40'), sunset: at('16:52') },
+    { sunrise: new Date('2026-11-22T06:41:00Z'), sunset: new Date('2026-11-22T16:51:00Z') }
+  ];
+  const clock = d => d.toISOString().slice(11, 16);
+
+  test('an afternoon ride in daylight reports the light left after it', () => {
+    const light = rideLight(at('14:00'), at('16:00'), DAYLIGHT);
+    assert.equal(light.status, 'day');
+    assert.equal(light.edge, 'sunset');
+    assert.equal(light.marginMin, 52);
+    assert.equal(light.sunset.getTime(), at('16:52').getTime());
+    assert.equal(describeRideLight(light, clock).text, 'Sunset 16:52 · 52 min of light after you finish');
+  });
+
+  test('a ride ending inside civil twilight is flagged, minutes counted', () => {
+    // 15:00–17:00 with sunset 16:52: the last 8 minutes are after sunset.
+    const light = rideLight(at('15:00'), at('17:00'), DAYLIGHT);
+    assert.equal(light.status, 'twilight');
+    assert.equal(light.twilightMin, 8);
+    assert.equal(light.darkMin, 0);
+    assert.equal(light.marginMin, -8);
+    const d = describeRideLight(light, clock);
+    assert.equal(d.level, 'warn');
+    assert.match(d.text, /last 8 min are in twilight, bring lights/);
+  });
+
+  test('a ride past twilight counts its minutes in the dark', () => {
+    // 16:00–18:00: 52 min light, 30 min twilight, 38 min dark.
+    const light = rideLight(at('16:00'), at('18:00'), DAYLIGHT);
+    assert.equal(light.status, 'dark');
+    assert.equal(light.twilightMin, 30);
+    assert.equal(light.darkMin, 38);
+    const d = describeRideLight(light, clock);
+    assert.equal(d.level, 'dark');
+    assert.equal(d.icon, '🌙');
+    assert.match(d.text, /^38 min in the dark — use lights · Sunset 16:52$/);
+  });
+
+  test('a morning ride is measured against sunrise', () => {
+    const light = rideLight(at('07:00'), at('09:00'), DAYLIGHT);
+    assert.equal(light.edge, 'sunrise');
+    assert.equal(light.status, 'day');
+    assert.equal(light.marginMin, 20);
+    assert.equal(describeRideLight(light, clock).text, 'Sunrise 06:40 · 20 min before you start');
+
+    const early = rideLight(at('06:00'), at('08:00'), DAYLIGHT);
+    assert.equal(early.status, 'dark');
+    assert.equal(early.darkMin, 10);
+    assert.equal(early.twilightMin, 30);
+  });
+
+  test('a ride on the next day uses that day’s sun', () => {
+    const light = rideLight(new Date('2026-11-22T15:00:00Z'), new Date('2026-11-22T16:00:00Z'), DAYLIGHT);
+    assert.equal(light.sunset.toISOString(), '2026-11-22T16:51:00.000Z');
+  });
+
+  test('null without usable sun times or a real span', () => {
+    assert.equal(rideLight(at('14:00'), at('16:00'), []), null);
+    assert.equal(rideLight(at('14:00'), at('16:00'), null), null);
+    assert.equal(rideLight(at('16:00'), at('14:00'), DAYLIGHT), null);
+    assert.equal(rideLight(new Date('nope'), at('14:00'), DAYLIGHT), null);
+    assert.equal(rideLight(new Date('2026-12-05T14:00:00Z'), new Date('2026-12-05T16:00:00Z'), DAYLIGHT), null, 'no sun data for that day');
+    assert.equal(describeRideLight(null, clock), null);
+  });
+});
+
+describe('formatMinutes', () => {
+  test('minutes, hours, and both', () => {
+    assert.equal(formatMinutes(37), '37 min');
+    assert.equal(formatMinutes(60), '1 h');
+    assert.equal(formatMinutes(75), '1 h 15 min');
+    assert.equal(formatMinutes(-5), '0 min');
   });
 });

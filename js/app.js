@@ -28,14 +28,14 @@ import {
 import {
   DISCIPLINES, scoreCurrent, scoreHourlySeries, findBestWindow, findHeadlineWindow, findRainTiming,
   generateSafetyAlerts, generateRecommendations, scoreTier, scoreOutAndBack,
-  comfortBand, DEFAULT_COMFORT_BAND
+  comfortBand, DEFAULT_COMFORT_BAND, rideLight, describeRideLight
 } from './insights.js';
 import {
   formatTemp, formatSpeed, formatVisibility, formatPercent, formatPrecip,
   degToCardinal, temperatureComfort, windDescriptor, convertTemp, systemFor,
   describeHourConditions, hourConditionsSentence
 } from './units.js';
-import { formatClock as clockAt, dayPrefix, formatWeekday, isNight, describeFreshness, shouldRefresh } from './time.js';
+import { formatClock as clockAt, formatShortClock, dayPrefix, formatWeekday, isNight, describeFreshness, shouldRefresh } from './time.js';
 import { createLatestGate, isAbort } from './net.js';
 import { bikeRoutesUrl } from './routes.js';
 import { planPlace, rankPlans, scoreWindowAt, shareHash, parseShareHash } from './plan.js';
@@ -58,6 +58,7 @@ const state = {
   routeBearing: null,     // compass bearing of the outbound leg, or null
   comfortBand: null,      // rider-calibrated [minC, maxC], or null for the default
   ridingSpeedKmh: null,   // rider-calibrated, or null for the discipline default
+  withLights: false,      // the rider rides with lights, so night hours may be suggested
   compare: null,          // { rows: [{ place, weather } | { place, error }], fromSaved }
   sharedRide: null,       // { key, start, hours } from a shared link, for that place only
   loading: false,
@@ -73,6 +74,7 @@ const BEARING_KEY = 'w4b:routeBearing';
 const COMFORT_KEY = 'w4b:comfortBand';
 // Also read by the Bike Routes app, which shares this origin — see js/routes.js.
 const SPEED_KEY = 'w4b:ridingSpeed';
+const LIGHTS_KEY = 'w4b:withLights';
 
 /** Scoring options derived from rider preferences, passed into every scorer call. */
 function scoringOptions() {
@@ -150,7 +152,7 @@ function cacheElements() {
     'theme-system', 'theme-light', 'theme-dark',
     'ride-duration', 'route-bearing', 'route-wind', 'routes-cta', 'compare-btn', 'compare-results',
     'compare-card', 'save-place-btn', 'saved-list',
-    'pref-temp-min', 'pref-temp-max', 'pref-speed', 'pref-reset', 'pref-hint'
+    'pref-temp-min', 'pref-temp-max', 'pref-speed', 'pref-reset', 'pref-hint', 'pref-lights'
   ];
   ids.forEach(id => { el[camel(id)] = document.getElementById(id); });
   el.activityButtons = ['activity-road', 'activity-gravel', 'activity-mtb']
@@ -287,6 +289,8 @@ function loadPreferences() {
 
     const speed = Number(localStorage.getItem(SPEED_KEY));
     if (Number.isFinite(speed) && speed >= 5 && speed <= 60) state.ridingSpeedKmh = speed;
+
+    state.withLights = localStorage.getItem(LIGHTS_KEY) === '1';
   } catch {
     // Private mode or corrupt JSON — defaults are fine.
   }
@@ -599,6 +603,16 @@ function bindPreferences() {
     renderAll();
   });
 
+  if (el.prefLights) {
+    el.prefLights.checked = state.withLights;
+    el.prefLights.addEventListener('change', () => {
+      state.withLights = el.prefLights.checked;
+      savePreference(LIGHTS_KEY, state.withLights ? '1' : '0');
+      renderBestWindow();
+      renderCompare();
+    });
+  }
+
   el.prefReset?.addEventListener('click', () => {
     state.comfortBand = null;
     state.ridingSpeedKmh = null;
@@ -741,7 +755,7 @@ function renderCompare() {
     ...row,
     index,
     plan: row.weather
-      ? planPlace(row.weather, state.activity, { rideHours: state.rideHours, scoring: scoringOptions(), now })
+      ? planPlace(row.weather, state.activity, { rideHours: state.rideHours, scoring: scoringOptions(), now, withLights: state.withLights })
       : null
   }));
   const ranked = rankPlans(rows.filter(r => r.plan));
@@ -751,6 +765,16 @@ function renderCompare() {
 
   // Each place's times are on its own clock, like the rest of the app.
   const windowText = (w, tz) => `${dayPrefix(w.start, now, tz) || 'Today '}${clockAt(w.start, tz)} – ${clockAt(w.end, tz)}`;
+  // The window against the sun, on the place's own clock: "🌇 Sunset 04:52 PM".
+  const windowLight = (w, r) => rideLight(w.start, w.end, getDaylightRanges(r.weather));
+  const sunText = (w, r) => {
+    const light = windowLight(w, r);
+    if (!light) return '';
+    const tz = r.weather.timezone;
+    const edge = light.edge === 'sunset' ? `🌇 Sunset ${clockAt(light.sunset, tz)}` : `🌅 Sunrise ${clockAt(light.sunrise, tz)}`;
+    return light.status === 'dark' ? `🌙 After dark · ${edge}` : edge;
+  };
+  const dayLight = (d, tz) => (d.sunrise && d.sunset ? `${formatShortClock(d.sunrise, tz)}–${formatShortClock(d.sunset, tz)}` : '');
   const placeLabel = (r, i) => `${i === 0 && r.plan.best ? '🏆 ' : ''}${escapeHtml(r.place.name)}${placeKey(r.place) === here ? ' <span class="text-xs font-normal text-gray-500 dark:text-gray-400">(here)</span>' : ''}`;
   const dayKeys = (state.weather?.daily || ranked[0]?.weather?.daily || []).map(d => d.date);
 
@@ -763,7 +787,7 @@ function renderCompare() {
         <button data-place-index="${r.index}" class="min-w-0 truncate text-left font-medium text-gray-900 dark:text-gray-100 hover:underline">${placeLabel(r, i)}</button>
         ${w ? `<span class="shrink-0 inline-flex items-center gap-1 ${t.badge} px-2.5 py-1 rounded-full text-sm font-medium">${w.tier.emoji} ${w.score}/10</span>` : ''}
       </div>
-      <div class="text-xs text-gray-600 dark:text-gray-300">${w ? escapeHtml(windowText(w, r.weather.timezone)) : `No ${state.rideHours}-hour daylight window this week`}</div>
+      <div class="text-xs text-gray-600 dark:text-gray-300">${w ? escapeHtml([windowText(w, r.weather.timezone), sunText(w, r)].filter(Boolean).join(' · ')) : `No ${state.rideHours}-hour ${state.withLights ? '' : 'daylight '}window this week`}</div>
       <div class="mt-2 grid grid-cols-7 gap-1" aria-hidden="true">
         ${r.plan.days.slice(0, 7).map(d => `<div class="text-center">
           <div class="h-2 rounded-sm ${tone(d.window?.tier.tone).bar}"></div>
@@ -789,12 +813,17 @@ function renderCompare() {
           </th>
           ${r.plan.days.slice(0, 7).map(d => {
             const w = d.window;
-            if (!w) return '<td class="text-center text-gray-400">—</td>';
             const tz = r.weather.timezone;
+            const sun = dayLight(d, tz);
+            const sunRow = sun ? `<div class="text-[10px] opacity-70 whitespace-nowrap" title="${escapeAttr(`Sunrise ${clockAt(d.sunrise, tz)} · Sunset ${clockAt(d.sunset, tz)}`)}"><span aria-hidden="true">☀</span> ${escapeHtml(sun)}</div>` : '';
+            if (!w) return `<td class="text-center text-gray-400 align-top">—${sunRow}</td>`;
             const isTop = top && i === 0 && w.start.getTime() === top.start.getTime();
-            return `<td class="rounded-md text-center px-1 py-1 ${tone(w.tier.tone).badge}${isTop ? ' ring-2 ring-blue-500' : ''}" title="${escapeAttr(`${windowText(w, tz)} · ${w.score}/10 ${w.tier.label}`)}">
+            const light = sunText(w, r);
+            const night = windowLight(w, r)?.status === 'dark';
+            return `<td class="rounded-md text-center px-1 py-1 ${tone(w.tier.tone).badge}${isTop ? ' ring-2 ring-blue-500' : ''}" title="${escapeAttr([`${windowText(w, tz)} · ${w.score}/10 ${w.tier.label}`, light].filter(Boolean).join(' · '))}">
               <div class="font-semibold">${w.score}</div>
-              <div class="text-[11px] opacity-80">${escapeHtml(clockAt(w.start, tz))}</div>
+              <div class="text-[11px] opacity-80">${night ? '<span aria-label="after dark">🌙</span> ' : ''}${escapeHtml(clockAt(w.start, tz))}</div>
+              ${sunRow}
             </td>`;
           }).join('')}
         </tr>`).join('')}
@@ -807,7 +836,7 @@ function renderCompare() {
     <div class="hidden sm:block overflow-x-auto">${table}</div>
     ${failed.length ? `<ul class="mt-2 space-y-1">${failed.map(r => `<li class="text-xs text-gray-500 dark:text-gray-400">${escapeHtml(r.place.name)}: forecast unavailable</li>`).join('')}</ul>` : ''}
     <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-      ${escapeHtml(DISCIPLINES[state.activity].label)}, ${state.rideHours}-hour rides in daylight. Each place on its own clock. Tap a place to open it.
+      ${escapeHtml(DISCIPLINES[state.activity].label)}, ${state.rideHours}-hour rides ${state.withLights ? 'day or night (you ride with lights)' : 'in daylight'}. ☀ sunrise–sunset. Each place on its own clock. Tap a place to open it.
       ${state.compare.fromSaved ? '' : ' These are your recent places — <strong>☆ Save</strong> the ones you ride so they stay here.'}
     </p>`;
 }
@@ -1283,7 +1312,8 @@ function renderBestWindow() {
   // Score the whole week so the same series answers both "today" and "this week".
   const scored = scoreHourlySeries(state.weather, state.activity, { hours: 168, ...scoringOptions() });
   const daylight = getDaylightRanges(state.weather);
-  const dl = daylight.length ? daylight : null;
+  // A rider with lights may be sent out after dark; the card then says so.
+  const dl = daylight.length && !state.withLights ? daylight : null;
 
   const search = { daylight: dl, minHours: hours, maxHours: hours };
   const best = findHeadlineWindow(scored, { ...search, withinHours: 24 });
@@ -1311,6 +1341,7 @@ function renderBestWindow() {
         <div>
           <div class="text-sm text-gray-600 dark:text-gray-300">Better later this week</div>
           <div class="text-lg font-semibold">${formatDayPrefix(week.start)}${formatClock(week.start)} – ${formatClock(week.end)}</div>
+          ${lightLine(week, daylight)}
         </div>
         <span class="inline-flex items-center gap-2 ${tone(week.tier.tone).badge} px-3 py-1 rounded-full text-sm font-medium">
           ${week.tier.emoji} ${week.score}/10 · ${escapeHtml(week.tier.label)}
@@ -1325,7 +1356,7 @@ function renderBestWindow() {
     el.bestWindow.innerHTML = `
       ${shared}
       <div class="rounded-lg border ${TONE.gray.border} ${TONE.gray.soft} p-4">
-        <div class="font-medium">No ${hours}-hour window in the next 24 hours of daylight.</div>
+        <div class="font-medium">No ${hours}-hour window in the next 24 hours${state.withLights ? '' : ' of daylight'}.</div>
         <div class="text-sm text-gray-600 dark:text-gray-300 mt-1">${week ? 'There is one later in the week.' : 'Try a shorter ride, or plan an indoor session.'}</div>
         <div class="text-sm text-gray-600 dark:text-gray-300 mt-2">${rainLine}</div>
       </div>
@@ -1339,7 +1370,7 @@ function renderBestWindow() {
 
   const t = tone(best.tier.tone);
   const chartHours = scored.slice(0, 24);
-  const sparkline = renderSparkline(chartHours, best);
+  const sparkline = renderSparkline(chartHours, best, daylight);
 
   el.bestWindow.innerHTML = `
     ${shared}
@@ -1349,6 +1380,7 @@ function renderBestWindow() {
           <div class="text-sm text-gray-600 dark:text-gray-300">Best ${best.hours}-hour window for ${escapeHtml(DISCIPLINES[state.activity].label)}</div>
           <div class="text-2xl font-bold mt-0.5">${formatDayPrefix(best.start)}${formatClock(best.start)} – ${formatClock(best.end)}</div>
           <div class="text-sm text-gray-600 dark:text-gray-300 mt-1">${rainLine}</div>
+          ${lightLine(best, daylight)}
         </div>
         <div class="inline-flex items-center gap-2 ${t.badge} px-3 py-1.5 rounded-full font-medium">
           ${best.tier.emoji} <span>${best.score}/10 · ${escapeHtml(best.tier.label)}</span>
@@ -1364,6 +1396,28 @@ function renderBestWindow() {
   // A keyboard user starts on the first hour of the recommended window.
   wireRideChart(chartHours, chartHours.findIndex(h => h.date.getTime() === best.start.getTime()));
   renderRoutesCta(best.start);
+}
+
+/**
+ * Goal: Show the ride against the sun on its card.
+ * Why: A ride that ends at 4:40 with sunset at 4:52 is fine — if you know it.
+ *      Twilight and night rides get a warning colour so they are not missed.
+ */
+function lightLine(ride, daylight) {
+  const d = describeRideLight(rideLight(ride.start, ride.end, daylight), formatClock);
+  if (!d) return '';
+  const colour = {
+    ok: 'text-gray-600 dark:text-gray-300',
+    warn: 'font-medium text-amber-800 dark:text-amber-300',
+    dark: 'font-medium text-indigo-800 dark:text-indigo-300'
+  }[d.level];
+  return `<div class="text-sm mt-1 ${colour}" data-ride-light><span aria-hidden="true">${d.icon}</span> ${escapeHtml(d.text)}</div>`;
+}
+
+/** The light sentence for text that leaves the page (a calendar event). */
+function lightNote(ride) {
+  const daylight = state.weather ? getDaylightRanges(state.weather) : [];
+  return describeRideLight(rideLight(ride.start, ride.end, daylight), formatClock)?.text || '';
 }
 
 // --- Sharing a ride, and putting it in a calendar ----------------------------
@@ -1423,7 +1477,8 @@ function rideCalendarUrl(ride) {
   return googleCalendarUrl(rideEvent(ride, {
     activityLabel: DISCIPLINES[state.activity].label,
     placeName: trimLocationText(formatLocationName(state.location)),
-    link: rideLink(ride)
+    link: rideLink(ride),
+    lightNote: lightNote(ride)
   }));
 }
 
@@ -1465,10 +1520,14 @@ function sharedRideCard(scored) {
     </div>`;
   }
   const t = tone(w.tier.tone);
+  // Whoever shared it may not have looked at the sunset; warn only when it matters.
+  const daylight = getDaylightRanges(state.weather);
+  const light = rideLight(ride.start, end, daylight);
   return `<div class="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border-2 border-blue-400 dark:border-blue-500 ${t.soft} px-3 py-2">
     <div>
       <div class="text-sm text-gray-600 dark:text-gray-300">Shared ride · ${escapeHtml(DISCIPLINES[state.activity].label)}</div>
       <div class="font-semibold">${escapeHtml(when)}</div>
+      ${light && light.status !== 'day' ? lightLine(w, daylight) : ''}
     </div>
     <span class="inline-flex items-center gap-1 ${t.badge} px-2.5 py-1 rounded-full text-sm font-medium">${w.tier.emoji} ${w.score}/10 · ${escapeHtml(w.tier.label)}</span>
   </div>`;
@@ -1547,7 +1606,7 @@ function renderRouteWind() {
  * A 24-bar strip: height and colour both encode the hourly rideability score.
  * It is also a slider over the hours — see `wireRideChart` for the tooltip.
  */
-function renderSparkline(scoredHours, highlight = null) {
+function renderSparkline(scoredHours, highlight = null, daylight = []) {
   if (!scoredHours.length) return '';
   const from = highlight ? highlight.start.getTime() : null;
   const to = highlight ? highlight.end.getTime() : null;
@@ -1567,18 +1626,60 @@ function renderSparkline(scoredHours, highlight = null) {
   const first = scoredHours[0];
   const mid = scoredHours[Math.floor(scoredHours.length / 2)];
   const last = scoredHours[scoredHours.length - 1];
+  const sun = sunOnChart(scoredHours, daylight);
 
   return `
     <div class="relative mt-3" data-ride-chart>
+      <div class="absolute inset-x-0 top-0 h-[44px] flex gap-[2px] pointer-events-none" aria-hidden="true">${sun.shade}</div>
+      ${sun.lines}
       <div role="slider" tabindex="0"
-           aria-label="Rideability by hour, next ${scoredHours.length} hours"
+           aria-label="Rideability by hour, next ${scoredHours.length} hours${sun.label}"
            aria-valuemin="0" aria-valuemax="${scoredHours.length - 1}" aria-valuenow="0"
-           class="flex items-end gap-[2px] h-[44px] cursor-crosshair select-none touch-pan-y rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800">${bars}</div>
+           class="relative flex items-end gap-[2px] h-[44px] cursor-crosshair select-none touch-pan-y rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800">${bars}</div>
       <div class="flex justify-between text-[11px] text-gray-500 dark:text-gray-400 mt-1" aria-hidden="true">
         <span>${formatClock(first.date)}</span><span>${formatClock(mid.date)}</span><span>${formatClock(last.date)}</span>
       </div>
+      ${sun.markers}
       <div data-ride-tip hidden aria-hidden="true" class="${RIDE_TIP}"></div>
     </div>`;
+}
+
+/**
+ * Goal: Show on the ride chart where the light goes.
+ * Why: A bar can be green at 6 PM in November; the chart should make plain
+ *      that it is dark then.
+ * How: A shaded column behind every hour whose middle is outside sunrise–
+ *      sunset, a thin line at each sunrise and sunset inside the chart, and a
+ *      labelled marker under it. Positions are percentages of the chart's span.
+ */
+function sunOnChart(scoredHours, daylight) {
+  const empty = { shade: '', lines: '', markers: '', label: '' };
+  if (!Array.isArray(daylight) || !daylight.length) return empty;
+
+  const t0 = scoredHours[0].date.getTime();
+  const span = scoredHours.length * 3600 * 1000;
+  const isLit = h => {
+    const m = h.date.getTime() + 1800 * 1000;
+    return daylight.some(r => m >= r.sunrise.getTime() && m <= r.sunset.getTime());
+  };
+  const shade = scoredHours.map(h => `<div class="flex-1 rounded-sm${isLit(h) ? '' : ' bg-indigo-900/10 dark:bg-indigo-300/10'}"></div>`).join('');
+
+  const events = daylight
+    .flatMap(r => [{ kind: 'sunrise', at: r.sunrise }, { kind: 'sunset', at: r.sunset }])
+    .filter(e => e.at.getTime() > t0 && e.at.getTime() < t0 + span)
+    .sort((a, b) => a.at - b.at);
+  if (!events.length) return { ...empty, shade };
+
+  const pct = e => ((e.at.getTime() - t0) / span) * 100;
+  const lines = events.map(e => `<div class="absolute top-0 z-10 h-[44px] w-0.5 -ml-px rounded-full bg-amber-500 pointer-events-none" style="left:${pct(e).toFixed(2)}%" aria-hidden="true"></div>`).join('');
+  const markers = `<div class="relative h-4 mt-0.5 text-[11px] text-amber-700 dark:text-amber-300" aria-hidden="true">${events.map(e => {
+    const x = pct(e);
+    // Keep the label inside the chart: pin it to an edge when the line is near one.
+    const pos = x < 15 ? `left:${x.toFixed(2)}%` : x > 85 ? `right:${(100 - x).toFixed(2)}%` : `left:${x.toFixed(2)}%;transform:translateX(-50%)`;
+    return `<span class="absolute whitespace-nowrap" style="${pos}">${e.kind === 'sunrise' ? '🌅' : '🌇'} ${escapeHtml(formatClock(e.at))}</span>`;
+  }).join('')}</div>`;
+  const label = `. ${events.map(e => `${e.kind === 'sunrise' ? 'Sunrise' : 'Sunset'} ${formatClock(e.at)}`).join(', ')}`;
+  return { shade, lines, markers, label };
 }
 
 // --- Ride chart tooltip -----------------------------------------------------

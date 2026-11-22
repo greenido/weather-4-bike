@@ -52,6 +52,24 @@ describe('planPlace', () => {
   });
 });
 
+describe('planPlace – daylight and lights', () => {
+  test('keeps rides out of the night, unless the rider rides with lights', () => {
+    // Only 20:00–23:00 on day one is rideable — after the 18:00 sunset.
+    const weather = threeDays(i => i >= 20 && i < 23);
+    const dark = planPlace(weather, 'road', { rideHours: 2, now: NOW });
+    assert.ok(!dark.best || dark.best.start.getUTCHours() < 18, 'no night ride without lights');
+
+    const lit = planPlace(weather, 'road', { rideHours: 2, now: NOW, withLights: true });
+    assert.equal(lit.best.start.toISOString(), '2026-10-01T20:00:00.000Z');
+  });
+
+  test('each day carries its sunrise and sunset', () => {
+    const plan = planPlace(threeDays(() => true), 'road', { rideHours: 2, now: NOW });
+    assert.equal(plan.days[0].sunrise.toISOString(), '2026-10-01T06:00:00.000Z');
+    assert.equal(plan.days[0].sunset.toISOString(), '2026-10-01T18:00:00.000Z');
+  });
+});
+
 describe('rankPlans', () => {
   const at = (h, score) => ({ plan: { best: { start: new Date(NOW.getTime() + h * HOUR), score } } });
 
