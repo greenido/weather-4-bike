@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   safeTimeZone, unixToIso, localDateKey, formatClock, dayPrefix,
-  formatWeekday, isNight, describeFreshness, shouldRefresh
+  formatWeekday, formatShortClock, isNight, describeFreshness, shouldRefresh
 } from '../js/time.js';
 import { inZone, VIEWER_ZONES } from './helpers.js';
 
@@ -51,6 +51,18 @@ describe('formatClock', () => {
 
   test('invalid input renders a dash', () => {
     assert.equal(formatClock('nope', TLV), '—');
+  });
+});
+
+describe('formatShortClock', () => {
+  test('drops AM/PM and the leading zero, on the location’s clock', () => {
+    for (const zone of VIEWER_ZONES) {
+      inZone(zone, () => {
+        assert.equal(formatShortClock(NOW, TLV, 'en-US'), '5:59', `viewer in ${zone}`);
+      });
+    }
+    assert.equal(formatShortClock('2026-09-11T14:52:00Z', 'UTC', 'en-GB'), '14:52');
+    assert.equal(formatShortClock('nope', TLV), '—');
   });
 });
 

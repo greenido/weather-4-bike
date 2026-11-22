@@ -789,6 +789,115 @@ function isDaylight(date, daylightRanges) {
 }
 
 /**
+ * Goal: Say where a ride sits against the sun — how much light is left when
+ *       it ends, or how much of it is in twilight or the dark.
+ * Why: The search keeps rides out of the dark, but allows civil twilight, and
+ *      a rider with lights may choose night hours. Either way the rider should
+ *      see the sunset before setting off, not discover it on the road.
+ * How: The ride belongs to the day whose solar noon is nearest its middle.
+ *      Time inside sunrise–sunset is light; inside the twilight margin is
+ *      twilight; anything else is dark. A morning ride is measured against
+ *      sunrise, an afternoon one against sunset.
+ *
+ * @param {Date} start
+ * @param {Date} end
+ * @param {{ sunrise: Date, sunset: Date }[]} daylightRanges
+ * @returns {{ status: 'day'|'twilight'|'dark', edge: 'sunrise'|'sunset',
+ *             sunrise: Date, sunset: Date, marginMin: number,
+ *             twilightMin: number, darkMin: number }|null}
+ *          marginMin is the light to spare: after an afternoon ride ends, or
+ *          before a morning one starts. Negative when the ride crosses the edge.
+ *          Null when the sun times are unknown for that day.
+ */
+export function rideLight(start, end, daylightRanges) {
+  if (!isValidDate(start) || !isValidDate(end) || end <= start || !Array.isArray(daylightRanges)) return null;
+  const ranges = daylightRanges.filter(r => isValidDate(r?.sunrise) && isValidDate(r?.sunset));
+  if (!ranges.length) return null;
+
+  const s = start.getTime();
+  const e = end.getTime();
+  const mid = (s + e) / 2;
+  const noon = r => (r.sunrise.getTime() + r.sunset.getTime()) / 2;
+  const day = ranges.reduce((a, b) => (Math.abs(noon(b) - mid) < Math.abs(noon(a) - mid) ? b : a));
+  if (Math.abs(noon(day) - mid) > 12 * 3600 * 1000) return null;
+
+  const lit = overlapMs(s, e, ranges.map(r => [r.sunrise.getTime(), r.sunset.getTime()]));
+  const usable = overlapMs(s, e, ranges.map(r => [r.sunrise.getTime() - TWILIGHT_MS, r.sunset.getTime() + TWILIGHT_MS]));
+  const toMin = ms => Math.round(ms / 60000);
+  const darkMin = toMin(e - s - usable);
+  const twilightMin = toMin(usable - lit);
+  const edge = mid < noon(day) ? 'sunrise' : 'sunset';
+
+  return {
+    status: darkMin > 0 ? 'dark' : twilightMin > 0 ? 'twilight' : 'day',
+    edge,
+    sunrise: day.sunrise,
+    sunset: day.sunset,
+    marginMin: toMin(edge === 'sunset' ? day.sunset.getTime() - e : s - day.sunrise.getTime()),
+    twilightMin,
+    darkMin
+  };
+}
+
+/**
+ * The ride's light as one short sentence, e.g. "Sunset 4:52 PM · 37 min of
+ * light after you finish". `clock` turns a Date into the location's wall time.
+ *
+ * @returns {{ icon: string, text: string, level: 'ok'|'warn'|'dark' }|null}
+ */
+export function describeRideLight(light, clock) {
+  if (!light) return null;
+  const sunset = light.edge === 'sunset';
+  const sunText = sunset ? `Sunset ${clock(light.sunset)}` : `Sunrise ${clock(light.sunrise)}`;
+  if (light.status === 'dark') {
+    return { icon: '🌙', text: `${formatMinutes(light.darkMin)} in the dark — use lights · ${sunText}`, level: 'dark' };
+  }
+  if (light.status === 'twilight') {
+    const part = sunset ? 'last' : 'first';
+    return { icon: sunset ? '🌇' : '🌅', text: `${sunText} — the ${part} ${formatMinutes(light.twilightMin)} are in twilight, bring lights`, level: 'warn' };
+  }
+  const spare = formatMinutes(light.marginMin);
+  return sunset
+    ? { icon: '🌇', text: `${sunText} · ${spare} of light after you finish`, level: 'ok' }
+    : { icon: '🌅', text: `${sunText} · ${spare} before you start`, level: 'ok' };
+}
+
+/** 37 → "37 min", 75 → "1 h 15 min", 120 → "2 h". */
+export function formatMinutes(min) {
+  const m = Math.max(0, Math.round(min));
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return rest ? `${h} h ${rest} min` : `${h} h`;
+}
+
+/** Milliseconds of [s, e) covered by the union of `intervals`. */
+function overlapMs(s, e, intervals) {
+  const sorted = intervals
+    .map(([a, b]) => [Math.max(a, s), Math.min(b, e)])
+    .filter(([a, b]) => b > a)
+    .sort((x, y) => x[0] - y[0]);
+  let total = 0;
+  let curA = null;
+  let curB = null;
+  for (const [a, b] of sorted) {
+    if (curB === null || a > curB) {
+      if (curB !== null) total += curB - curA;
+      curA = a;
+      curB = b;
+    } else {
+      curB = Math.max(curB, b);
+    }
+  }
+  if (curB !== null) total += curB - curA;
+  return total;
+}
+
+function isValidDate(value) {
+  return value instanceof Date && !Number.isNaN(value.getTime());
+}
+
+/**
  * Goal: Tell the rider when rain starts or stops in the next hours.
  * Why: "Dry until 2pm" is a plan; "40% chance today" is trivia.
  * How: Walk the scored/hourly series for the first meaningful wet hour, and if

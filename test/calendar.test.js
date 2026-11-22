@@ -24,6 +24,11 @@ describe('rideEvent', () => {
     assert.ok(event.details.includes(LINK), 'links back to the app to check again');
   });
 
+  test('notes the ride against the sun', () => {
+    const event = rideEvent(RIDE, { activityLabel: 'Road', lightNote: 'Sunset 4:52 PM · 52 min of light after you finish' });
+    assert.match(event.details, /Sunset 4:52 PM · 52 min of light after you finish\./);
+  });
+
   test('leaves out what it does not know', () => {
     const event = rideEvent({ start: RIDE.start, end: RIDE.end }, { activityLabel: 'Road' });
     assert.equal(event.title, 'Road ride');

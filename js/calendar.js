@@ -22,10 +22,11 @@ export const GOOGLE_CALENDAR_URL = 'https://calendar.google.com/calendar/render'
  * A ride as a calendar event.
  *
  * @param {{ start: Date, end: Date, score?: number, tier?: { label: string } }} ride
- * @param {{ activityLabel: string, placeName?: string, link?: string }} context
+ * @param {{ activityLabel: string, placeName?: string, link?: string, lightNote?: string }} context
+ *        lightNote: the ride against the sun, e.g. 'Sunset 4:52 PM · 37 min of light after you finish'
  * @returns {{ title: string, start: Date, end: Date, details: string, location: string }|null}
  */
-export function rideEvent(ride, { activityLabel, placeName = '', link = '' } = {}) {
+export function rideEvent(ride, { activityLabel, placeName = '', link = '', lightNote = '' } = {}) {
   if (!isDate(ride?.start) || !isDate(ride?.end) || ride.end <= ride.start) return null;
 
   const where = String(placeName || '').trim();
@@ -36,6 +37,7 @@ export function rideEvent(ride, { activityLabel, placeName = '', link = '' } = {
     const label = ride.tier?.label ? ` (${ride.tier.label})` : '';
     lines.push(`Forecast when planned: ${ride.score}/10${label}.`);
   }
+  if (lightNote) lines.push(`${lightNote}.`);
   if (link) lines.push(`Check the latest forecast before you go: ${link}`);
 
   return { title, start: ride.start, end: ride.end, details: lines.join('\n'), location: where };
